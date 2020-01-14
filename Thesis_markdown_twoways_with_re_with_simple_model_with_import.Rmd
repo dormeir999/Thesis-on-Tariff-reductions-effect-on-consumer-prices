@@ -1,0 +1,2460 @@
+---
+title: "The effect of tarrif reduction on consumer price"
+author: "Dor Meir"
+date: "August 22, 2019"
+output:
+  pdf_document:
+    toc: yes
+    toc_float: true
+    toc_depth: '3'
+
+---
+
+<Setting up things>
+
+```{r setup, include=FALSE}
+#install.packages("estout")
+library(haven)
+#install.packages("plm")
+library(plm)
+### TUNA
+tuna <- read_dta("stata_tuna_with_sardines_without_sardin_and_tuna_outliers.dta")
+tuna<-pdata.frame(tuna,index=c("brand_number","date"),drop.index = TRUE, row.names = TRUE)
+## Drop strong outliers:
+# Sardin:
+# filtuna prices evenly range from 0.55 NIS/kg to 162 NIS/kg, which both are very unlikely:
+tuna<-subset(tuna,!(sardin==1&brand_name=="filtuna_m_big"))
+# wilifood prices range from 26.68 NIS/kg (reasonble) to 136 NIS/kg (very unreasonable), with a mean of 78 (Other products mean are 41) :
+tuna<-subset(tuna,!(sardin==1&brand_name=="wilifood_m_big"))
+#tuna<-subset(tuna,!(sardin==1&brand_name=="private_brand_m_big"))
+# observations of same brand who are less than 8 NIS/Kg:
+#tuna$price_nom[tuna$tuna==1&tuna$price_nom<8]=NA
+# Tuna:
+# The mean is 36.68 NIS/Kg, but these observations:
+# 136 NIS/Kg:
+tuna$price_nom["57-382018"]=NA
+# 323 NIS/Kg:
+tuna$price_nom["46-42015"]=NA
+# 9 observation of same brand who are less than 8 NIS/Kg:
+tuna$price_nom[tuna$tuna==1&tuna$price_nom<8]=NA
+# observations which are more than 60 NIS/Kg:
+#tuna$price_nom[tuna$tuna==1&tuna$price_nom>60]=NA
+#tuna<-subset(tuna,!(tuna==1&brand_name=="man_ugiot_i"))
+### Oil
+oil <- read_dta("stata_oil_with_cooking_without_outliers.dta")
+# Converting to pdata.frame (a panel data with both individual and time index), so that we won't have to use the index paramter on the plm command (like xtset in stata)
+oil<-pdata.frame(oil,index=c("brand_number","date"),drop.index = TRUE, row.names = TRUE)
+### Cheese
+cheese <- read_dta("stata_cheese_with_white_without_outliers.dta")
+colnames(cheese)[6]="date_stata_time"
+#cheese$price_nom[which(cheese$price_nom==-Inf)]=NA
+cheese <- cbind(cheese, date_backup=cheese$date_n)
+cheese <- cbind(cheese, lprice_nom=log(cheese$price_nom))
+cheese<-pdata.frame(cheese,index=c("brand_number","date_n"),drop.index = TRUE, row.names = TRUE)
+colnames(cheese)[40]="date_n"
+cheese$lprice_nom[which(cheese$lprice_nom==-Inf)]=NA
+cheese$price_nom[which(cheese$price_nom==-Inf)]=NA
+## Panel Data Linear Model package:
+#install.packages("plm")
+#install.packages("coeftest")
+
+#Setup stata commands:
+#install.packages('RStata')
+#options("RStata.StataPath" = "C:/Users/Dor Meir/Documents/stata14/stata14")
+#options("RStata.StataVersion" = 14.2)
+
+#install.packages("sandwich")
+library(sandwich)
+#install.packages("lmtest")
+library("lmtest")
+#install.packages("stargazer")
+#library("stargazer")
+#install.packages("tidyverse")
+#library("tidyverse")
+require(ggplot2)
+library(tree)
+#install.packages("DataCombine")
+#library("DataCombine")
+#install.packages("tibble")
+```
+
+# Data exploration - graphs of nominal price
+
+```{r data exploration, echo=FALSE,message=FALSE, warning=FALSE, results=TRUE}
+## TUNA
+library(tibble)
+#library(tidyverse) # for data wrangling and plotting
+library(svglite) # for better looking plots
+library(kableExtra) # for better looking tables
+library(RefManageR) # for referencing
+library(truncnorm) # for drawing from a truncated normal distribution
+library(tidymodels) # for modelling
+library(knitr) # for presenting tables
+library(mlbench) # for the Boston Housing data
+library(ggdag) # for plotting DAGs
+tuna_tibble <-as_tibble(tuna)
+tuna_tibble %>% select(brand_name, price_nom, date_n, month, year, tuna, sardin)
+tuna$date_n_factor <- as.factor(tuna$date_n)
+p <- ggplot(data = tuna, aes(x = date_n_factor, y = price_nom , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ sardin) + ggtitle("Tuna (left) & Sardin (right) cans monthly prices over ~3.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(20, 60))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ sardin) + ggtitle("A closer look: Tuna (left) & Sardin (right) cans monthly prices over ~3.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# log price
+p <- ggplot(data = tuna, aes(x = date_n_factor, y = lprice_nom , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ sardin) + ggtitle("Tuna (left) & Sardin (right) cans monthly prices over ~3.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(3, 4))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ sardin) + ggtitle("A closer look: Tuna (left) & Sardin (right) cans monthly prices over ~3.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+## OIL
+oil_tibble <-as_tibble(oil)
+oil_tibble %>% select(brand_name, price_nom, date_n, month, year, olive, cooking_oil)
+oil$date_n_factor <- as.factor(oil$date_n)
+p <- ggplot(data = oil, aes(x = date_n_factor, y = price_nom , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ cooking_oil) + ggtitle("Olive (left) & Cooking (right) oils monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(5, 60))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ cooking_oil) + ggtitle("A closer look: Olive (left) & Cooking (right) oils monthly prices over 2.34 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# log price
+p <- ggplot(data = oil, aes(x = date_n_factor, y = lprice_nom , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ cooking_oil) + ggtitle("Olive (left) & Cooking (right) oils monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(2, 4))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ cooking_oil) + ggtitle("A closer look: Olive (left) & Cooking (right) oils monthly prices over 2.34 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+## Cheese
+cheese_tibble <-as_tibble(cheese)
+cheese_tibble %>% select(brand_name, price_nom, date_n, month, year, yellow, white_cheese)
+cheese$date_n_factor <- as.factor(cheese$date_n)
+p <- ggplot(data = cheese, aes(x = date_n_factor, y = price_nom , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ white_cheese) + ggtitle("White (left) & Yellow (right )cheeses monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(20, 70))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ white_cheese) + ggtitle("A closer look: Yellow (left) and White (right) cheeses monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# log price
+p <- ggplot(data = cheese, aes(x = date_n_factor, y = lprice_nom , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ white_cheese) + ggtitle("White (left) & Yellow (right )cheeses monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(2.5, 5))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ white_cheese) + ggtitle("A closer look: Yellow (left) and White (right) cheeses monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+```
+
+# Tree models
+
+"At every node, a set of possible split points is identified for every predictor variable. The algorithm calculates the improvement in purity of the data that would be created by each split point of each variable. The split with the greatest improvement is chosen to partition the data and create child nodes."
+
+```{r trees, include=TRUE}
+tuna_tree <- tree( price_nom ~ jan2015reduc + jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna , tuna)
+plot(tuna_tree)
+text(tuna_tree)
+oil_tree <- tree( price_nom ~ jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive , oil)
+plot(oil_tree)
+text(oil_tree)
+cheese_tree <- tree(price_nom ~ jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, cheese)
+#plot(cheese_tree)
+#text(cheese_tree)
+summary(cheese_tree)
+```
+
+_No good split was found in the cheese tarrif reduction model!_
+
+# Linear Models
+
+## Random Effects Models
+### Random Effects full model (close to stata default panel data model)
+
+```{r random effects, include=TRUE}
+tuna_re_full <- plm(price_nom ~  jan2015reduc + jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna, effect="twoways", model = "random")
+#stargazer(tuna_re_full)
+nobs(tuna_re_full)
+coeftest(tuna_re_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_re_full <- plm(price_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil, effect="twoways",model = "random") 
+nobs(oil_re_full)
+coeftest(oil_re_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_re_full <- plm(price_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, data = cheese, effect="twoways",model = "random") 
+nobs(cheese_re_full)
+coeftest(cheese_re_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+That's the closest I got to the stata result of:
+xtreg price_nom jan2015reduc jan2015reduc_tuna jan2016reduc jan2016reduc_tuna, re
+it is actually closer to:
+xtreg price_nom jan2015reduc jan2015reduc_tuna jan2016reduc jan2016reduc_tuna, sa
+-> which is the the Random Effect small-sample Swamy–Arora estimator individual-level variance component.
+
+### Random Effects - most significant time frames
+
+The full Random effect model in the timeframes which give the most significant results (without cheese, which is insignificant):
+
+```{r most significant random-effects, include=TRUE}
+tuna$lsalary_industry_worker<-log(tuna$salary_industry_worker)
+oil$lsalary_industry_worker<-log(oil$salary_industry_worker)
+cheese$lsalary_industry_worker<-log(cheese$salary_industry_worker)
+
+tuna_signif <- subset(tuna,date_n<382017)
+tuna_re_full_significant <- plm(price_nom ~  jan2015reduc + jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_re_full_significant, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_signif <- subset(oil,year<2018)
+oil_re_full_significant <- plm(price_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_re_full_significant, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_signif <- subset(cheese,date_n<382017)
+
+```
+
+## Fixed effects models
+
+### Fixed effect full model
+
+Fixed effect is preffered since it has no prior assumption on the unobserved individual effect ci, and this effect may be correlated with the explantory variable (fixed effects assumption).
+Nothing is significant with the exception of tuna, but this significance might be a results of ommitting the jan2015reduc_tuna dummy, which is dropped because of singularities.
+Note that *in the fe model, the time-invariant regressors cancel!* - which means that the reduction dummy's (jan2015reduc, etc...) will cancel out.
+*I believe they are failing due to the dummy variable trap!*
+
+
+```{r fixed effects, include=TRUE}
+tuna_fe_full <- plm(price_nom ~  jan2015reduc + jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna, effect="twoways",model = "within")
+coeftest(tuna_fe_full, vcov.=function(x) vcovHC(x,type="sss",cluster="group"));within_intercept(tuna_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+summary(tuna_fe_full)
+oil_fe_full <- plm(price_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil, effect="twoways",model = "within") 
+coeftest(oil_fe_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(oil_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_fe_full <- plm(price_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, data = cheese, effect="twoways",model = "within") 
+coeftest(cheese_fe_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(cheese_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+Let's check for linear dependency in the tuna fe model:
+
+```{r checking for linear dependency, include=TRUE}
+alias(tuna_fe_full)
+```
+
+As you can see, jan2015reduc is linear depenedent in jan2015reduc_tuna, and there for it's effect cannot be identified.
+Let's omit the jan2015reduc variable, and run the model again:
+
+```{r tuna fixed effects without jan2015reduc, include=TRUE}
+tuna_fe_full_not_linear <- plm(price_nom ~  jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna, effect="twoways",model = "within")
+coeftest(tuna_fe_full_not_linear, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full_not_linear,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+summary(tuna_fe_full_not_linear)
+```
+
+Now we don't have linear dependencies, and **jan2016reduc_tuna positive effect was found significant to the level of 5%.** some from now one the tuna FE model will omit the jan2015reduc variable.
+(switching between jan2015reduc and jan2015reduc_tuna gives the sames exact estimator for both of them - another proof the of linear dependence between the two)
+
+### Fixed effect full model - most significant time frames
+
+```{r most significant fixed-effects, include=TRUE}
+tuna_fe_full_significant <- plm(price_nom ~  jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "within")
+coeftest(tuna_fe_full_significant, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full_significant,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_fe_full_significant <- plm(price_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "within") 
+coeftest(oil_fe_full_significant, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(oil_fe_full_significant,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+This time the jan2016reduc in oil became significant.
+
+## Hausman Test: Random Effects Vs. Fixed effects
+We'll use the Hausman Test for Panel Models in order to determine which model suits best the data - fixed effect or random effect:
+```{r Hausman Test, include=TRUE}
+phtest(tuna_fe_full,tuna_re_full)
+phtest(oil_fe_full,oil_re_full)
+phtest(cheese_fe_full,cheese_re_full)
+phtest(tuna_fe_full_significant,tuna_re_full_significant)
+phtest(oil_fe_full_significant,oil_re_full_significant)
+```
+*The tuna and cheese models corresponds to random effect, while the oil corresponds to fixed effects.*
+
+# Log-Linear Models
+
+These models are the exact same one from before, except the explained variable, the nominal price, is not transformed into ln(nominal price).
+
+## Random Effects
+
+### Random Effects full model (close to stata default panel data model)
+
+```{r log random effects, include=TRUE}
+tuna_lre_full <- plm(lprice_nom ~  jan2015reduc + jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna, effect="twoways",model = "random")
+coeftest(tuna_lre_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_lre_full <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil, effect="twoways",model = "random") 
+coeftest(oil_lre_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_lre_full <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, data = cheese, effect="twoways",model = "random") 
+coeftest(cheese_lre_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### Random Effects - most significant time frames
+
+```{r most significant log random-effects, include=TRUE}
+tuna_signif <- subset(tuna,date_n<382017)
+cheese_signif <- subset(cheese,date_n<382017)
+
+
+tuna_lre_full_significant <- plm(lprice_nom ~  jan2015reduc + jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_lre_full_significant, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_signif <- subset(oil,year<2018)
+oil_lre_full_significant <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_lre_full_significant, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_lre_full_significant <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, data = cheese_signif, effect="twoways",model = "random") 
+coeftest(cheese_lre_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+## Fixed Effects models
+### Fixed effect full model
+
+```{r log fixed effects, include=TRUE}
+tuna_lfe_full <- plm(lprice_nom ~  jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna, effect="twoways",model = "within")
+coeftest(tuna_lfe_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_lfe_full <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil, effect="twoways",model = "within") 
+coeftest(oil_lfe_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_lfe_full <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, data = cheese, effect="twoways",model = "within") 
+coeftest(cheese_lfe_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+**In comparison to the linear fixed-effects model,
+the log-linear fixed-effects models of cheese returned significant results:
+the jan2016reduc_yellow negative effect was significant to the level of 6%.**
+
+### Fixed effect full model - most significant time frames
+
+```{r most significant log fixed-effects, include=TRUE}
+tuna_lfe_full_significant <- plm(lprice_nom ~  jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "within")
+coeftest(tuna_lfe_full_significant, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_lfe_full_significant <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "within") 
+coeftest(oil_lfe_full_significant, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_lfe_full <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, data = cheese_signif, effect="twoways",model = "within") 
+coeftest(cheese_lfe_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"));within_intercept(tuna_fe_full,vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+## Hausman Test: Random Effects Vs. Fixed effects
+```{r log-linear Hausman Test, include=TRUE}
+phtest(tuna_lfe_full,tuna_lre_full)
+phtest(oil_lfe_full,oil_lre_full)
+phtest(cheese_lfe_full,cheese_lre_full)
+phtest(tuna_lfe_full_significant,tuna_lre_full_significant)
+phtest(oil_lfe_full_significant,oil_lre_full_significant)
+```
+The p-value much is bigger than 0.05 on all tests ->>
+*All of the models are significantly more suited for the random effects settings.*
+_So from now on we'll continue only with the random effects._
+
+## Random Effects models with lags
+
+### full log model with lead and lags
+
+```{r log random effects with lead and lags, include=TRUE}
+#tuna
+tuna_lre_full_lags <- plm(lprice_nom ~  jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,1) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,1) , data = tuna, effect="twoways",model = "random")
+coeftest(tuna_lre_full_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+#oil
+oil_lre_full_lags <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,1) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,1) , data = oil, effect="twoways",model = "random") 
+coeftest(oil_lre_full_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# Cheese
+cheese_lre_full_lags <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,1) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,1) , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_lre_full_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### Random Effect full log model with significant lead and lags
+
+Now, let's try model only the significant leads and lags:
+
+```{r log random effect with only significant lead and lags, include=TRUE}
+#tuna
+tuna_lre_full_lags <- plm(lprice_nom ~  jan2015reduc  + jan2015reduc_tuna +  + jan2016reduc + jan2016reduc_tuna + lag(jan2016reduc_tuna,1) , data = tuna, effect="twoways",model = "random")
+coeftest(tuna_lre_full_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+#oil
+oil_lre_full_lags <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive  , data = oil, effect="twoways",model = "random") 
+coeftest(oil_lre_full_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# Cheese
+cheese_lre_full_lags <- plm(lprice_nom ~  jan2016reduc +  jan2016reduc_yellow + lag(jan2016reduc_yellow,1) + jan2017reduc + jan2017reduc_yellow  , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_lre_full_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+**To sum up: adding only the significant leads and lags led to:
+1. Tuna (& sardins) - no significant effect of tarrif reduction on price
+2. Oil - significant effect of tarrif reduction on both olive and cooking price
+3. Cheese - sinigicant effect of tarrif reduction on yellow price in jan2016
+These results are quite similiar to the results of the model without the leads and lags**
+
+### random effect, Add covariates, without lead and lags
+
+```{r log fixed-effects with with covariates, include=TRUE}
+#tuna
+tuna_lre_covariates_lags <- plm(lprice_nom ~  jan2015reduc_tuna + jan2016reduc + lag(jan2016reduc,5) + jan2016reduc_tuna + lag(jan2016reduc_tuna,5) + proccess_fish_p2012 +  salary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_lre_covariates_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+#oil
+oil_lre_covariates_lags <- plm(lprice_nom ~ lead(jan2016reduc,1) + jan2016reduc + lag(jan2016reduc,1) + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive + proccess_oil_p2012 +  salary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_lre_covariates_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# Cheese
+cheese_lre_covariates_lags <- plm(lprice_nom ~  jan2016reduc + lag(jan2016reduc,2) + jan2016reduc_yellow + jan2017reduc + lag(jan2017reduc,3) + jan2017reduc_yellow + proccess_milk_products_p2012 , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_lre_covariates_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+**The covariates are insignificant...**
+
+### random effect, Add covariates, with lead and lags
+
+```{r log fixed-effects with covariates and lead and lags, include=TRUE}
+#tuna
+tuna_lre_covariates_lags <- plm(lprice_nom ~  jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,1) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,1) + proccess_fish_p2012 +  salary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_lre_covariates_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+#oil
+oil_lre_covariates_lags <- plm(lprice_nom ~ jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,1) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,1) + proccess_oil_p2012 +  salary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_lre_covariates_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# Cheese
+cheese_lre_covariates_lags <- plm(lprice_nom ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,1) + jan2017reduc + lead(jan2017reduc_yellow,1) + proccess_milk_products_p2012 , effect="twoways", data = cheese_signif,model = "random")
+coeftest(cheese_lre_covariates_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+## Net price -  price minus raw material cost (Random effects only)
+
+The explained is the consumer price minus material cost or cost of prduct in a country which is a main exporter to Israel
+```{r net price setup, echo=FALSE,message=FALSE, warning=FALSE, results=TRUE}
+### TUNA
+# The net price of tuna:
+tuna$price_net <- tuna$price_nom
+tuna$price_net[tuna$tuna==1] <- tuna$price_nom[tuna$tuna==1] - tuna$thai_price[tuna$tuna==1]
+# The net price of sardin:
+tuna$price_net[tuna$sardin==1] <- tuna$price_nom[tuna$sardin==1] - tuna$"sardin_latvia"[tuna$sardin==1]
+tuna$lprice_net<-log(tuna$price_net)
+### OIL
+# The net price of olive oil:
+oil$price_net <- oil$price_nom
+oil$price_net[oil$olive==1] <- oil$price_nom[oil$olive==1] - oil$it_sp_price[oil$olive==1]
+# The net price of cooking oil:
+oil$price_net[oil$cooking_oil==1] <- oil$price_nom[oil$cooking_oil==1] - oil$cooking_oil_world[oil$cooking_oil==1]
+oil$lprice_net<-log(oil$price_net)
+# # Cheese
+# The net price of yellow cheese:
+cheese$price_net <- cheese$price_nom
+cheese$price_net[cheese$yellow==1] <- cheese$price_nom[cheese$yellow==1] - cheese$pl_price[cheese$yellow==1]
+
+# The net price of white cheese:
+cheese$price_net[cheese$white_cheese==1] <- cheese$price_nom[cheese$white_cheese==1] - cheese$white_poland[cheese$white_cheese==1]
+cheese$lprice_net<-log(cheese$price_net)
+
+cheese_signif <- subset(cheese,date_n<382017)
+```
+
+### Graphs - net price
+
+```{r net data exploration, echo=FALSE,message=FALSE, warning=FALSE, results=TRUE}
+## TUNA
+tuna_tibble <-as_tibble(tuna)
+tuna_tibble %>% select(brand_name, price_net, date_n, month, year, tuna, sardin)
+tuna$date_n_factor <- as.factor(tuna$date_n)
+p <- ggplot(data = tuna, aes(x = date_n_factor, y = price_net , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ sardin) + ggtitle("Tuna (left) & Sardin (right) cans monthly prices over ~3.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# log price
+p <- ggplot(data = tuna, aes(x = date_n_factor, y = lprice_net , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ sardin) + ggtitle("Tuna (left) & Sardin (right) cans monthly prices over ~3.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(3, 4))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ sardin) + ggtitle("A closer look: Tuna (left) & Sardin (right) cans monthly prices over ~3.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+## OIL
+oil_tibble <-as_tibble(oil)
+oil_tibble %>% select(brand_name, price_net, date_n, month, year, olive, cooking_oil)
+oil$date_n_factor <- as.factor(oil$date_n)
+p <- ggplot(data = oil, aes(x = date_n_factor, y = price_net , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ cooking_oil) + ggtitle("Olive (left) & Cooking (right) oils monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# log price
+p <- ggplot(data = oil, aes(x = date_n_factor, y = lprice_net , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ cooking_oil) + ggtitle("Olive (left) & Cooking (right) oils monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(1.25, 3.5))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ cooking_oil) + ggtitle("A closer look: Olive (left) & Cooking (right) oils monthly prices over 2.34 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+## Cheese
+cheese_tibble <-as_tibble(cheese)
+cheese_tibble %>% select(brand_name, price_net, date_n, month, year, yellow, white_cheese)
+cheese$date_n_factor <- as.factor(cheese$date_n)
+p <- ggplot(data = cheese, aes(x = date_n_factor, y = price_net , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ white_cheese) + ggtitle("White (left) & Yellow (right )cheeses monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# log price
+p <- ggplot(data = cheese, aes(x = date_n_factor, y = lprice_net , group = brand_name,color=brand_name))
+p + geom_point() + stat_smooth(aes(group = 1)) + stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ white_cheese) + ggtitle("White (left) & Yellow (right )cheeses monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+# And a closer look:
+p + geom_point() + stat_smooth(aes(group = 1)) + coord_cartesian(ylim =c(3, 4))+ stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 30, size = 3) + facet_grid(. ~ white_cheese) + ggtitle("A closer look: Yellow (left) and White (right) cheeses monthly prices over ~2.25 years") + theme(text = element_text(size=8),axis.text.x = element_text(angle=90, hjust=1),legend.position = "none") + geom_vline(xintercept = c(5,17), color = "black", size=0.5)
+```
+
+
+
+```{r net price, include=TRUE}
+### TUNA
+tuna_signif <- subset(tuna,date_n<382017)
+cheese_signif <- subset(cheese,date_n<382017)
+
+# The model
+tuna_net_lre_lags <- plm(lprice_net ~  jan2015reduc_tuna + jan2016reduc +  jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_signif <- subset(oil,year<2018)
+# The model
+oil_net_lre_lags <- plm(lprice_net ~ jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_signif <- subset(cheese,date_n<382017)
+# The model
+cheese_net_lre_lags <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### Net price, with covariates 
+
+```{r net price with covariates, include=TRUE, warning=FALSE}
+### TUNA
+tuna_net_lre_covariates <- plm(lprice_net ~  jan2015reduc + jan2015reduc_tuna + jan2016reduc +  jan2016reduc_tuna + proccess_fish_p2012 +  salary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_covariates, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_covariates <- plm(lprice_net ~ jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive + proccess_oil_p2012 +  salary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_covariates, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_covariates <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow + proccess_milk_products_p2012 , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_lre_covariates_lags, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+**The covariates are insignificant!**
+
+## Net price, no leads and lags
+
+```{r net price without covariates, include=TRUE, warning=FALSE}
+### TUNA
+tuna_net_lre_covariates <- plm(lprice_net ~  jan2015reduc + jan2015reduc_tuna + jan2016reduc +  jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_covariates, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_covariates <- plm(lprice_net ~ jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_covariates, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_covariates <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow, data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_covariates, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+## Net price, with lead and lags
+
+### lag = 1
+
+```{r net price with lead and lags 1, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lead(jan2015reduc_tuna,1) + lag(jan2015reduc,1) + lag(jan2015reduc_tuna,1) + lead(jan2016reduc,1) + lead(jan2016reduc_tuna,1)+ lag(jan2016reduc,1) + lag(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,1) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,1) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,1), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lag = 1 without lead
+
+```{r net price with lead and lags 1 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,1) + lag(jan2015reduc_tuna,1) + lag(jan2016reduc,1) + lag(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,1) + lag(jan2016reduc_olive,1) + lag(jan2017reduc,1) + lag(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   lag(jan2016reduc,1) + lag(jan2016reduc_yellow,1) + lag(jan2017reduc,1) + lag(jan2017reduc_yellow,1), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 2
+
+```{r net price with lead and lags 2, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,2) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,2), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,2) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,2), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,2) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,2), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lag = 2 without lag
+
+```{r net price with lags 2, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,2) + lag(jan2015reduc_tuna,2) + lag(jan2016reduc,2) + lag(jan2016reduc_tuna,2), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2016reduc_olive,2) + lag(jan2017reduc,2) + lag(jan2017reduc_olive,2), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,2) + lag(jan2016reduc_yellow,2) + lag(jan2017reduc,2) + lag(jan2017reduc_yellow,2), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 3
+
+```{r net price with lead and lags 3, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,3) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,3), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,3) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,3), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,3) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,3), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lag = 3 without lag
+
+```{r net price with lags 3, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,3) + lag(jan2015reduc_tuna,3) + lag(jan2016reduc,3) + lag(jan2016reduc_tuna,3), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2016reduc_olive,3) + lag(jan2017reduc,3) + lag(jan2017reduc_olive,3), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   lag(jan2016reduc,3) + lag(jan2016reduc_yellow,3) + lag(jan2017reduc,3) + lag(jan2017reduc_yellow,3) + jan2017reduc_yellow + lag(jan2017reduc_yellow,3), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 4
+
+```{r net price with lead and lags 4, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,4) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,4) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,4) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,4), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lag = 4 without lead
+
+```{r net price with  and lags 4, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,4) + lag(jan2015reduc_tuna,4) + lag(jan2016reduc,4) + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2016reduc_olive,4) +lag(jan2017reduc,4) + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,4) + lag(jan2016reduc_yellow,4) +lag(jan2017reduc,4) + lag(jan2017reduc_yellow,4), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 4 without lead with t1
+
+```{r net price with lead and lags 4 without lead, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ jan2015reduc + jan2015reduc_tuna + lag(jan2015reduc_tuna,4) + jan2016reduc + + jan2016reduc_tuna + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc+ jan2016reduc_olive + lag(jan2016reduc_olive,4) + jan2017reduc + jan2017reduc_olive + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   jan2016reduc + jan2016reduc_yellow + lag(jan2016reduc_yellow,4) + jan2017reduc + jan2017reduc_yellow + lag(jan2017reduc_yellow,4), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 4 without lead, without t=1
+
+```{r net price with lead and lags 4 without lead without t1, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,4) + lag(jan2015reduc_tuna,4) + lag(jan2016reduc,4) + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2016reduc_olive,4) + lag(jan2017reduc,4) + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,4) + lag(jan2016reduc_yellow,4) + lag(jan2017reduc,4) + lag(jan2017reduc_yellow,4), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 5
+
+```{r net price with lead and lags 5, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,5) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,5) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,5) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,5), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 5 without lead
+
+```{r net price with only lags 5, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ jan2015reduc + jan2015reduc_tuna + lag(jan2015reduc_tuna,5) + jan2016reduc + jan2016reduc_tuna + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc  + jan2016reduc_olive + lag(jan2016reduc_olive,5) + jan2017reduc + jan2017reduc_olive + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   jan2016reduc + jan2016reduc_yellow + lag(jan2016reduc_yellow,5) + jan2017reduc + jan2017reduc_yellow + lag(jan2017reduc_yellow,5), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+??
+### lag = 5 , all of them, without lead
+????
+```{r net price with only lags 5 all of them , include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ jan2015reduc + jan2015reduc_tuna  + lag(jan2015reduc_tuna,5) + jan2016reduc + lag(jan2016reduc,5) + jan2016reduc_tuna + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc  + lag(jan2016reduc,5) + jan2016reduc_olive + lag(jan2016reduc_olive,5) + jan2017reduc + lag(jan2017reduc,5) + jan2017reduc_olive + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~ jan2016reduc + lag(jan2016reduc,5) + jan2016reduc_yellow + lag(jan2016reduc_yellow,5) + jan2017reduc + lag(jan2017reduc,5) + jan2017reduc_yellow + lag(jan2017reduc_yellow,5), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 5 without lead, only lag
+
+```{r net price with only lags 5, only lag, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,5) + lag(jan2015reduc_tuna,5) + lag(jan2016reduc,5) + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,5) + lag(jan2016reduc_olive,5) + lag(jan2017reduc,5) + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   lag(jan2016reduc,5) + lag(jan2016reduc_yellow,5) + lag(jan2017reduc,5) + lag(jan2017reduc_yellow,5), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 6 without lead
+
+```{r net price with lead and lags 6 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,6) + lag(jan2015reduc_tuna,6) + lag(jan2016reduc,6) + lag(jan2016reduc_tuna,6), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,6) + lag(jan2016reduc_olive,6) + lag(jan2017reduc,6) + lag(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   lag(jan2016reduc,6) + lag(jan2016reduc_yellow,6) + lag(jan2017reduc,6) + lag(jan2017reduc_yellow,6), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 7 without lead
+
+```{r net price with lead and lags 7 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,7) + lag(jan2015reduc_tuna,7) + lag(jan2016reduc,7) + lag(jan2016reduc_tuna,7), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,7) + lag(jan2016reduc_olive,7) + lag(jan2017reduc,7) + lag(jan2017reduc_olive,7), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   lag(jan2016reduc,7) + lag(jan2016reduc_yellow,7) + lag(jan2017reduc,7) + lag(jan2017reduc_yellow,7), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 8 without lead
+
+```{r net price with lead and lags 8 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,8) + lag(jan2015reduc_tuna,8) + lag(jan2016reduc,8) + lag(jan2016reduc_tuna,8), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,8) + lag(jan2016reduc_olive,8) + lag(jan2017reduc,8) + lag(jan2017reduc_olive,8), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   lag(jan2016reduc,8) + lag(jan2016reduc_yellow,8) + lag(jan2017reduc,8) + lag(jan2017reduc_yellow,8), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 9 without lead
+
+```{r net price with lead and lags 9 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,9) + lag(jan2015reduc_tuna,9) + lag(jan2016reduc,9) + lag(jan2016reduc_tuna,9), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,9) + lag(jan2016reduc_olive,9) + lag(jan2017reduc,9) + lag(jan2017reduc_olive,9), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   lag(jan2016reduc,9) + lag(jan2016reduc_yellow,9) + lag(jan2017reduc,9) + lag(jan2017reduc_yellow,9), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 10 without lead
+
+```{r net price with lead and lags 10 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_net ~ lag(jan2015reduc,10) + lag(jan2015reduc_tuna,10) + lag(jan2016reduc,10) + lag(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~ lag(jan2016reduc,10) + lag(jan2016reduc_olive,10) + lag(jan2017reduc,10) + lag(jan2017reduc_olive,10), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_net ~   lag(jan2016reduc,10) + lag(jan2016reduc_yellow,10) + lag(jan2017reduc,10) + lag(jan2017reduc_yellow,10), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+
+### Net price with significant lead and lags, version#1
+
+```{r net price with significant lead and lags, include=TRUE}
+### TUNA
+tuna_net_lre_lags_sig <- plm(lprice_net ~ jan2015reduc_tuna + lag(jan2015reduc_tuna,1) + jan2016reduc + + jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_sig <- plm(lprice_net ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+**These are some interesting results:
+In tuna & sardin, the overall reduction led to a negative effect on the price sardin, but in the tuna market there was a postivie effect on price!
+In Olive & Cooking oil, a negetive effect came in 3 months lag in 2016, and while the 2017 reduction led to an increase in cooling oil price, it led to a decrease in coolking oil price/
+In Yellow and White cheeses, the 2016 reduction was found to have a negative effect on the net price of yellow cheese with 1 month delay, and the 2017 reduction was also found to have a negative effect on the yellow cheese price, without a delay.**
+
+
+
+
+### Net price with significant lead and lags, version#2
+
+```{r net price with significant lead and lags ver 2, include=TRUE}
+### TUNA
+tuna_net_lre_lags_sig <- plm(lprice_net ~ jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna + lag(jan2016reduc_tuna, 4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_sig <- plm(lprice_net ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+## Net price with significant lead and lags AND import interaction dummy
+
+There was no setting under which the tuna 2015 and 2016 effects didn't create a dummy trap, so the two years were seperated in the case of tuna -->
+
+```{r net price with significant lead and lags and import, include=TRUE}
+### TUNA
+tuna$jan2015reduc_tuna_import <- tuna$jan2015reduc_tuna*tuna$import
+tuna$jan2016reduc_tuna_import <- tuna$jan2015reduc_tuna*tuna$import
+tuna_signif <- subset(tuna,date_n<382017)
+tuna_net_lre_lags_sig_import_2015 <- plm(lprice_net ~ jan2015reduc_tuna +  jan2015reduc_tuna_import, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig_import_2015, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+tuna_net_lre_lags_sig_import_2016 <- plm(lprice_net ~ jan2016reduc_tuna +  jan2016reduc_tuna_import, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig_import_2016, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil$jan2016reduc_olive_import <- oil$jan2016reduc_olive*oil$import
+oil$jan2017reduc_olive_import <- oil$jan2017reduc_olive*oil$import
+oil_signif <- subset(oil,year<2018)
+oil_net_lre_lags_sig_import <- plm(lprice_net ~ jan2016reduc + jan2016reduc_olive +  lag(jan2016reduc_olive,3) + jan2016reduc_olive_import + jan2017reduc + jan2017reduc_olive + jan2017reduc_olive_import, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig_import, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese$jan2016reduc_yellow_import <- cheese$jan2016reduc_yellow*cheese$import
+cheese$jan2017reduc_yellow_import <- cheese$jan2017reduc_yellow*cheese$import
+cheese_net_lre_lags_sig_import <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + lag(jan2016reduc_yellow,1) + jan2016reduc_yellow_import+ jan2017reduc + jan2017reduc_yellow + lag(jan2017reduc_yellow,1) + jan2016reduc_yellow_import , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig_import, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_signif <- subset(cheese,date_n<382017)
+```
+
+import as an interaction dummy was found not insignificant, and in tuna it was also ommitted due to linearity. import as a regular dummy deleted by the fixed effects estimation(?).
+
+
+## nom price, with lead and lags
+
+### lag = 1
+
+```{r nom price with lead and lags 1, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,1) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,1) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,1) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,1), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lag = 1 without lead
+
+```{r nom price with lead and lags 1 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,1) + lag(jan2015reduc_tuna,1) + lag(jan2016reduc,1) + lag(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,1) + lag(jan2016reduc_olive,1) + lag(jan2017reduc,1) + lag(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   lag(jan2016reduc,1) + lag(jan2016reduc_yellow,1) + lag(jan2017reduc,1) + lag(jan2017reduc_yellow,1), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 2
+
+```{r nom price with lead and lags 2, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,2) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,2), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,2) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,2), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,2) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,2), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lag = 2 without lag
+
+```{r nom price with lags 2, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,2) + lag(jan2015reduc_tuna,2) + lag(jan2016reduc,2) + lag(jan2016reduc_tuna,2), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2016reduc_olive,2) + lag(jan2017reduc,2) + lag(jan2017reduc_olive,2), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,2) + lag(jan2016reduc_yellow,2) + lag(jan2017reduc,2) + lag(jan2017reduc_yellow,2), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 3
+
+```{r nom price with lead and lags 3, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,3) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,3), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,3) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,3), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,3) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,3), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lag = 3 without lag
+
+```{r nom price with lags 3, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,3) + lag(jan2015reduc_tuna,3) + lag(jan2016reduc,3) + lag(jan2016reduc_tuna,3), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2016reduc_olive,3) + lag(jan2017reduc,3) + lag(jan2017reduc_olive,3), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   lag(jan2016reduc,3) + lag(jan2016reduc_yellow,3) + lag(jan2017reduc,3) + lag(jan2017reduc_yellow,3) + jan2017reduc_yellow + lag(jan2017reduc_yellow,3), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 4
+
+```{r nom price with lead and lags 4, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,4) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,4) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,4) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,4), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lag = 4 without lead
+
+```{r nom price with  and lags 4, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,4) + lag(jan2015reduc_tuna,4) + lag(jan2016reduc,4) + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2016reduc_olive,4) +lag(jan2017reduc,4) + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,4) + lag(jan2016reduc_yellow,4) +lag(jan2017reduc,4) + lag(jan2017reduc_yellow,4), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 4 without lead with t1
+
+```{r nom price with lead and lags 4 without lead, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ jan2015reduc + jan2015reduc_tuna + lag(jan2015reduc_tuna,4) + jan2016reduc + + jan2016reduc_tuna + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  jan2016reduc+ jan2016reduc_olive + lag(jan2016reduc_olive,4) + jan2017reduc + jan2017reduc_olive + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   jan2016reduc + jan2016reduc_yellow + lag(jan2016reduc_yellow,4) + jan2017reduc + jan2017reduc_yellow + lag(jan2017reduc_yellow,4), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 4 without lead, without t=1
+
+```{r nom price with lead and lags 4 without lead without t1, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,4) + lag(jan2015reduc_tuna,4) + lag(jan2016reduc,4) + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2016reduc_olive,4) + lag(jan2017reduc,4) + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,4) + lag(jan2016reduc_yellow,4) + lag(jan2017reduc,4) + lag(jan2017reduc_yellow,4), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 5
+
+```{r nom price with lead and lags 5, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ jan2015reduc + lead(jan2015reduc_tuna,1) + jan2015reduc_tuna + lag(jan2015reduc_tuna,5) + jan2016reduc + lead(jan2016reduc_tuna,1) + jan2016reduc_tuna + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + lag(jan2016reduc_olive,5) + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   jan2016reduc + lead(jan2016reduc_yellow,1) + jan2016reduc_yellow + lag(jan2016reduc_yellow,5) + jan2017reduc + lead(jan2017reduc_yellow,1) + jan2017reduc_yellow + lag(jan2017reduc_yellow,5), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 5 without lead
+
+```{r nom price with only lags 5, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ jan2015reduc + jan2015reduc_tuna + lag(jan2015reduc_tuna,5) + jan2016reduc + jan2016reduc_tuna + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  jan2016reduc  + jan2016reduc_olive + lag(jan2016reduc_olive,5) + jan2017reduc + jan2017reduc_olive + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   jan2016reduc + jan2016reduc_yellow + lag(jan2016reduc_yellow,5) + jan2017reduc + jan2017reduc_yellow + lag(jan2017reduc_yellow,5), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+??
+### lag = 5 , all of them, without lead
+????
+```{r nom price with only lags 5 all of them , include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ jan2015reduc + jan2015reduc_tuna  + lag(jan2015reduc_tuna,5) + jan2016reduc + lag(jan2016reduc,5) + jan2016reduc_tuna + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~  jan2016reduc  + lag(jan2016reduc,5) + jan2016reduc_olive + lag(jan2016reduc_olive,5) + jan2017reduc + lag(jan2017reduc,5) + jan2017reduc_olive + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~ jan2016reduc + lag(jan2016reduc,5) + jan2016reduc_yellow + lag(jan2016reduc_yellow,5) + jan2017reduc + lag(jan2017reduc,5) + jan2017reduc_yellow + lag(jan2017reduc_yellow,5), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 5 without lead, only lag
+
+```{r nom price with only lags 5, only lag, include=TRUE}
+
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,5) + lag(jan2015reduc_tuna,5) + lag(jan2016reduc,5) + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,5) + lag(jan2016reduc_olive,5) + lag(jan2017reduc,5) + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   lag(jan2016reduc,5) + lag(jan2016reduc_yellow,5) + lag(jan2017reduc,5) + lag(jan2017reduc_yellow,5), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 6 without lead
+
+```{r nom price with lead and lags 6 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,6) + lag(jan2015reduc_tuna,6) + lag(jan2016reduc,6) + lag(jan2016reduc_tuna,6), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,6) + lag(jan2016reduc_olive,6) + lag(jan2017reduc,6) + lag(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   lag(jan2016reduc,6) + lag(jan2016reduc_yellow,6) + lag(jan2017reduc,6) + lag(jan2017reduc_yellow,6), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 7 without lead
+
+```{r nom price with lead and lags 7 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,7) + lag(jan2015reduc_tuna,7) + lag(jan2016reduc,7) + lag(jan2016reduc_tuna,7), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,7) + lag(jan2016reduc_olive,7) + lag(jan2017reduc,7) + lag(jan2017reduc_olive,7), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   lag(jan2016reduc,7) + lag(jan2016reduc_yellow,7) + lag(jan2017reduc,7) + lag(jan2017reduc_yellow,7), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 8 without lead
+
+```{r nom price with lead and lags 8 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,8) + lag(jan2015reduc_tuna,8) + lag(jan2016reduc,8) + lag(jan2016reduc_tuna,8), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,8) + lag(jan2016reduc_olive,8) + lag(jan2017reduc,8) + lag(jan2017reduc_olive,8), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   lag(jan2016reduc,8) + lag(jan2016reduc_yellow,8) + lag(jan2017reduc,8) + lag(jan2017reduc_yellow,8), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 9 without lead
+
+```{r nom price with lead and lags 9 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,9) + lag(jan2015reduc_tuna,9) + lag(jan2016reduc,9) + lag(jan2016reduc_tuna,9), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,9) + lag(jan2016reduc_olive,9) + lag(jan2017reduc,9) + lag(jan2017reduc_olive,9), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   lag(jan2016reduc,9) + lag(jan2016reduc_yellow,9) + lag(jan2017reduc,9) + lag(jan2017reduc_yellow,9), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+### lag = 10 without lead
+
+```{r nom price with lead and lags 10 without lag, include=TRUE}
+### TUNA
+tuna_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2015reduc,10) + lag(jan2015reduc_tuna,10) + lag(jan2016reduc,10) + lag(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_nom ~ lag(jan2016reduc,10) + lag(jan2016reduc_olive,10) + lag(jan2017reduc,10) + lag(jan2017reduc_olive,10), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_full <- plm(lprice_nom ~   lag(jan2016reduc,10) + lag(jan2016reduc_yellow,10) + lag(jan2017reduc,10) + lag(jan2017reduc_yellow,10), data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+
+### nom price with significant lead and lags, version#1
+
+```{r nom price with significant lead and lags, include=TRUE}
+### TUNA
+tuna_net_lre_lags_sig <- plm(lprice_nom ~ jan2015reduc_tuna + lag(jan2015reduc_tuna,1) + jan2016reduc + + jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_sig <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+**These are some interesting results:
+In tuna & sardin, the overall reduction led to a negative effect on the price sardin, but in the tuna market there was a postivie effect on price!
+In Olive & Cooking oil, a negetive effect came in 3 months lag in 2016, and while the 2017 reduction led to an increase in cooling oil price, it led to a decrease in coolking oil price/
+In Yellow and White cheeses, the 2016 reduction was found to have a negative effect on the nom price of yellow cheese with 1 month delay, and the 2017 reduction was also found to have a negative effect on the yellow cheese price, without a delay.**
+
+### nom price with significant lead and lags, version#2
+
+```{r nom price with significant lead and lags ver 2, include=TRUE}
+### TUNA
+tuna_net_lre_lags_sig <- plm(lprice_nom ~ jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna + lag(jan2016reduc_tuna, 4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_sig <- plm(lprice_nom ~  jan2016reduc + lead(jan2016reduc_olive,1) + jan2016reduc_olive + jan2017reduc + lead(jan2017reduc_olive,1) + jan2017reduc_olive + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+## nom price with significant lead and lags AND import interaction dummy
+
+There was no setting under which the tuna 2015 and 2016 effects didn't create a dummy trap, so the two years were seperated in the case of tuna -->
+
+```{r nom price with significant lead and lags and import, include=TRUE}
+### TUNA
+tuna$jan2015reduc_tuna_import <- tuna$jan2015reduc_tuna*tuna$import
+tuna$jan2016reduc_tuna_import <- tuna$jan2015reduc_tuna*tuna$import
+tuna_signif <- subset(tuna,date_n<382017)
+tuna_net_lre_lags_sig_import_2015 <- plm(lprice_nom ~ jan2015reduc_tuna +  jan2015reduc_tuna_import, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig_import_2015, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+tuna_net_lre_lags_sig_import_2016 <- plm(lprice_nom ~ jan2016reduc_tuna +  jan2016reduc_tuna_import, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig_import_2016, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil$jan2016reduc_olive_import <- oil$jan2016reduc_olive*oil$import
+oil$jan2017reduc_olive_import <- oil$jan2017reduc_olive*oil$import
+oil_signif <- subset(oil,year<2018)
+oil_net_lre_lags_sig_import <- plm(lprice_nom ~ jan2016reduc + jan2016reduc_olive +  lag(jan2016reduc_olive,3) + jan2016reduc_olive_import + jan2017reduc + jan2017reduc_olive + jan2017reduc_olive_import, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig_import, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese$jan2016reduc_yellow_import <- cheese$jan2016reduc_yellow*cheese$import
+cheese$jan2017reduc_yellow_import <- cheese$jan2017reduc_yellow*cheese$import
+cheese_net_lre_lags_sig_import <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + lag(jan2016reduc_yellow,1) + jan2016reduc_yellow_import+ jan2017reduc + jan2017reduc_yellow + lag(jan2017reduc_yellow,1) + jan2016reduc_yellow_import , data = cheese, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig_import, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+import as an interaction dummy was found not insignificant, and in tuna it was also ommitted due to linearity. import as a regular dummy deleted by the fixed effects estimation(?).
+
+
+
+# Thesis Draft results
+
+## diff-in-diff (Without import )
+
+### regular model 
+
+```{r regular , include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lags_sig <- plm(lprice_net ~ jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_full <- plm(lprice_net ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_full, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lags_sig <- plm(lprice_nom ~ jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lags_sig <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lags_sig <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+
+# lprice_net
+### TUNA
+tuna_net_lre_lags_sig_X <- plm(lprice_net ~ jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_sig_X <- plm(lprice_net ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig_X <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lags_sig_X <- plm(lprice_nom ~ jan2015reduc_tuna + jan2016reduc + jan2016reduc_tuna+ proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lags_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lags_sig_X <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_olive + jan2017reduc + jan2017reduc_olive + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lags_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lags_sig_X <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2017reduc + jan2017reduc_yellow + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lags_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+### lead 1
+
+```{r only lead 1, include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lead_1_sig <- plm(lprice_net ~ lead(jan2015reduc_tuna,1) + lead(jan2016reduc,1) + lead(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lead_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lead_1_sig <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2016reduc_olive,1) + lead(jan2017reduc,1) + lead(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lead_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lead_1_sig <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2016reduc_yellow,1) + lead(jan2017reduc,1) + lead(jan2017reduc_yellow,1) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lead_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lead_1_sig <- plm(lprice_nom ~ lead(jan2015reduc_tuna,1) + lead(jan2016reduc,1) + lead(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lead_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lead_1_sig <- plm(lprice_nom ~  lead(jan2016reduc,1) + lead(jan2016reduc_olive,1) + lead(jan2017reduc,1) + lead(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lead_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lead_1_sig <- plm(lprice_nom ~  lead(jan2016reduc,1) + lead(jan2016reduc_yellow,1) + lead(jan2017reduc,1) + lead(jan2017reduc_yellow,1) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lead_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+# lprice_net
+### TUNA
+tuna_net_lre_lead_1_sig_X <- plm(lprice_net ~ lead(jan2015reduc_tuna,1) + lead(jan2016reduc,1) + lead(jan2016reduc_tuna,1) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lead_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lead_1_sig_X <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2016reduc_olive,1) + lead(jan2017reduc,1) + lead(jan2017reduc_olive,1) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lead_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lead_1_sig_X <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2016reduc_yellow,1) + lead(jan2017reduc,1) + lead(jan2017reduc_yellow,1) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lead_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lead_1_sig_X <- plm(lprice_nom ~ lead(jan2015reduc_tuna,1) + lead(jan2016reduc,1) + lead(jan2016reduc_tuna,1) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lead_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lead_1_sig_X <- plm(lprice_nom ~  lead(jan2016reduc,1) + lead(jan2016reduc_olive,1) + lead(jan2017reduc,1) + lead(jan2017reduc_olive,1) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lead_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lead_1_sig_X <- plm(lprice_nom ~  lead(jan2016reduc,1) + lead(jan2016reduc_yellow,1) + lead(jan2017reduc,1) + lead(jan2017reduc_yellow,1) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker  , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lead_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+```
+
+### lead_2
+
+```{r only lead 2, include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lead_2_sig <- plm(lprice_net ~ lead(jan2015reduc_tuna,2) + lead(jan2016reduc,2) + lead(jan2016reduc_tuna,2), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lead_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lead_2_sig <- plm(lprice_net ~  lead(jan2016reduc,2) + lead(jan2016reduc_olive,2) + lead(jan2017reduc,2) + lead(jan2017reduc_olive,2), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lead_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lead_2_sig <- plm(lprice_net ~  lead(jan2016reduc,2) + lead(jan2016reduc_yellow,2) + lead(jan2017reduc,2) + lead(jan2017reduc_yellow,2) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lead_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lead_2_sig <- plm(lprice_nom ~ lead(jan2015reduc_tuna,2) + lead(jan2016reduc,2) + lead(jan2016reduc_tuna,2), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lead_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lead_2_sig <- plm(lprice_nom ~  lead(jan2016reduc,2) + lead(jan2016reduc_olive,2) + lead(jan2017reduc,2) + lead(jan2017reduc_olive,2), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lead_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lead_2_sig <- plm(lprice_nom ~  lead(jan2016reduc,2) + lead(jan2016reduc_yellow,2) + lead(jan2017reduc,2) + lead(jan2017reduc_yellow,2) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lead_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+# lprice_net
+### TUNA
+tuna_net_lre_lead_2_sig_X <- plm(lprice_net ~ lead(jan2015reduc_tuna,2) + lead(jan2016reduc,2) + lead(jan2016reduc_tuna,2) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lead_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lead_2_sig_X <- plm(lprice_net ~  lead(jan2016reduc,2) + lead(jan2016reduc_olive,2) + lead(jan2017reduc,2) + lead(jan2017reduc_olive,2) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lead_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lead_2_sig_X <- plm(lprice_net ~  lead(jan2016reduc,2) + lead(jan2016reduc_yellow,2) + lead(jan2017reduc,2) + lead(jan2017reduc_yellow,2) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lead_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lead_2_sig_X <- plm(lprice_nom ~ lead(jan2015reduc_tuna,2) + lead(jan2016reduc,2) + lead(jan2016reduc_tuna,2) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lead_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lead_2_sig_X <- plm(lprice_nom ~  lead(jan2016reduc,2) + lead(jan2016reduc_olive,2) + lead(jan2017reduc,2) + lead(jan2017reduc_olive,2) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lead_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lead_2_sig_X <- plm(lprice_nom ~  lead(jan2016reduc,2) + lead(jan2016reduc_yellow,2) + lead(jan2017reduc,2) + lead(jan2017reduc_yellow,2) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker  , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lead_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+```
+
+### lag_1
+
+```{r only lag 1, include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lag_1_sig <- plm(lprice_net ~ lag(jan2015reduc_tuna,1) + lag(jan2016reduc,1) + lag(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_1_sig <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2016reduc_olive,1) + lag(jan2017reduc,1) + lag(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_1_sig <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2016reduc_yellow,1) + lag(jan2017reduc,1) + lag(jan2017reduc_yellow,1) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_1_sig <- plm(lprice_nom ~ lag(jan2015reduc_tuna,1) + lag(jan2016reduc,1) + lag(jan2016reduc_tuna,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_1_sig <- plm(lprice_nom ~  lag(jan2016reduc,1) + lag(jan2016reduc_olive,1) + lag(jan2017reduc,1) + lag(jan2017reduc_olive,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_1_sig <- plm(lprice_nom ~  lag(jan2016reduc,1) + lag(jan2016reduc_yellow,1) + lag(jan2017reduc,1) + lag(jan2017reduc_yellow,1) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_1_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+# lprice_net
+### TUNA
+tuna_net_lre_lag_1_sig_X <- plm(lprice_net ~ lag(jan2015reduc_tuna,1) + lag(jan2016reduc,1) + lag(jan2016reduc_tuna,1) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_1_sig_X <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2016reduc_olive,1) + lag(jan2017reduc,1) + lag(jan2017reduc_olive,1) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_1_sig_X <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2016reduc_yellow,1) + lag(jan2017reduc,1) + lag(jan2017reduc_yellow,1) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_1_sig_X <- plm(lprice_nom ~ lag(jan2015reduc_tuna,1) + lag(jan2016reduc,1) + lag(jan2016reduc_tuna,1) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_1_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,1) + lag(jan2016reduc_olive,1) + lag(jan2017reduc,1) + lag(jan2017reduc_olive,1) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_1_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,1) + lag(jan2016reduc_yellow,1) + lag(jan2017reduc,1) + lag(jan2017reduc_yellow,1) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker  , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_1_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+```
+
+### lag_2
+
+```{r only lag 2, include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lag_2_sig <- plm(lprice_net ~ lag(jan2015reduc_tuna,2) + lag(jan2016reduc,2) + lag(jan2016reduc_tuna,2), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_2_sig <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2016reduc_olive,2) + lag(jan2017reduc,2) + lag(jan2017reduc_olive,2), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_2_sig <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2016reduc_yellow,2) + lag(jan2017reduc,2) + lag(jan2017reduc_yellow,2) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_2_sig <- plm(lprice_nom ~ lag(jan2015reduc_tuna,2) + lag(jan2016reduc,2) + lag(jan2016reduc_tuna,2), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_2_sig <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2016reduc_olive,2) + lag(jan2017reduc,2) + lag(jan2017reduc_olive,2), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_2_sig <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2016reduc_yellow,2) + lag(jan2017reduc,2) + lag(jan2017reduc_yellow,2) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_2_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+# lprice_net
+### TUNA
+tuna_net_lre_lag_2_sig_X <- plm(lprice_net ~ lag(jan2015reduc_tuna,2) + lag(jan2016reduc,2) + lag(jan2016reduc_tuna,2) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_2_sig_X <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2016reduc_olive,2) + lag(jan2017reduc,2) + lag(jan2017reduc_olive,2) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_2_sig_X <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2016reduc_yellow,2) + lag(jan2017reduc,2) + lag(jan2017reduc_yellow,2) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_2_sig_X <- plm(lprice_nom ~ lag(jan2015reduc_tuna,2) + lag(jan2016reduc,2) + lag(jan2016reduc_tuna,2) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_2_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2016reduc_olive,2) + lag(jan2017reduc,2) + lag(jan2017reduc_olive,2) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_2_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2016reduc_yellow,2) + lag(jan2017reduc,2) + lag(jan2017reduc_yellow,2) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker  , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_2_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+```
+
+### lag_3
+
+```{r only lag 3, include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lag_3_sig <- plm(lprice_net ~ lag(jan2015reduc_tuna,3) + lag(jan2016reduc,3) + lag(jan2016reduc_tuna,3), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_3_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_3_sig <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2016reduc_olive,3) + lag(jan2017reduc,3) + lag(jan2017reduc_olive,3), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_3_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_3_sig <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2016reduc_yellow,3) + lag(jan2017reduc,3) + lag(jan2017reduc_yellow,3) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_3_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_3_sig <- plm(lprice_nom ~ lag(jan2015reduc_tuna,3) + lag(jan2016reduc,3) + lag(jan2016reduc_tuna,3), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_3_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_3_sig <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2016reduc_olive,3) + lag(jan2017reduc,3) + lag(jan2017reduc_olive,3), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_3_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_3_sig <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2016reduc_yellow,3) + lag(jan2017reduc,3) + lag(jan2017reduc_yellow,3) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_3_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+# lprice_net
+### TUNA
+tuna_net_lre_lag_3_sig_X <- plm(lprice_net ~ lag(jan2015reduc_tuna,3) + lag(jan2016reduc,3) + lag(jan2016reduc_tuna,3) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_3_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_3_sig_X <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2016reduc_olive,3) + lag(jan2017reduc,3) + lag(jan2017reduc_olive,3) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_3_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_3_sig_X <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2016reduc_yellow,3) + lag(jan2017reduc,3) + lag(jan2017reduc_yellow,3) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_3_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_3_sig_X <- plm(lprice_nom ~ lag(jan2015reduc_tuna,3) + lag(jan2016reduc,3) + lag(jan2016reduc_tuna,3) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker
+, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_3_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_3_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2016reduc_olive,3) + lag(jan2017reduc,3) + lag(jan2017reduc_olive,3) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_3_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_3_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2016reduc_yellow,3) + lag(jan2017reduc,3) + lag(jan2017reduc_yellow,3)
+ + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker  , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_3_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+```
+
+### lag_4
+
+```{r only lag 4, include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lag_4_sig <- plm(lprice_net ~ lag(jan2015reduc_tuna,4) + lag(jan2016reduc,4) + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_4_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_4_sig <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2016reduc_olive,4) + lag(jan2017reduc,4) + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_4_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_4_sig <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2016reduc_yellow,4) + lag(jan2017reduc,4) + lag(jan2017reduc_yellow,4) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_4_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_4_sig <- plm(lprice_nom ~ lag(jan2015reduc_tuna,4) + lag(jan2016reduc,4) + lag(jan2016reduc_tuna,4), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_4_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_4_sig <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2016reduc_olive,4) + lag(jan2017reduc,4) + lag(jan2017reduc_olive,4), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_4_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_4_sig <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2016reduc_yellow,4) + lag(jan2017reduc,4) + lag(jan2017reduc_yellow,4) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_4_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+# lprice_net
+### TUNA
+tuna_net_lre_lag_4_sig_X <- plm(lprice_net ~ lag(jan2015reduc_tuna,4) + lag(jan2016reduc,4) + lag(jan2016reduc_tuna,4) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_4_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_4_sig_X <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2016reduc_olive,4) + lag(jan2017reduc,4) + lag(jan2017reduc_olive,4) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_4_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_4_sig_X <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2016reduc_yellow,4) + lag(jan2017reduc,4) + lag(jan2017reduc_yellow,4) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_4_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_4_sig_X <- plm(lprice_nom ~ lag(jan2015reduc_tuna,4) + lag(jan2016reduc,4) + lag(jan2016reduc_tuna,4) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_4_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_4_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2016reduc_olive,4) + lag(jan2017reduc,4) + lag(jan2017reduc_olive,4) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_4_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_4_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2016reduc_yellow,4) + lag(jan2017reduc,4) + lag(jan2017reduc_yellow,4) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker  , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_4_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+```
+### lag_5
+
+```{r only lag 5, include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lag_5_sig <- plm(lprice_net ~ lag(jan2015reduc_tuna,5) + lag(jan2016reduc,5) + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_5_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_5_sig <- plm(lprice_net ~  lag(jan2016reduc,5) + lag(jan2016reduc_olive,5) + lag(jan2017reduc,5) + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_5_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_5_sig <- plm(lprice_net ~  lag(jan2016reduc,5) + lag(jan2016reduc_yellow,5) + lag(jan2017reduc,5) + lag(jan2017reduc_yellow,5) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_5_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_5_sig <- plm(lprice_nom ~ lag(jan2015reduc_tuna,5) + lag(jan2016reduc,5) + lag(jan2016reduc_tuna,5), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_5_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_5_sig <- plm(lprice_nom ~  lag(jan2016reduc,5) + lag(jan2016reduc_olive,5) + lag(jan2017reduc,5) + lag(jan2017reduc_olive,5), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_5_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_5_sig <- plm(lprice_nom ~  lag(jan2016reduc,5) + lag(jan2016reduc_yellow,5) + lag(jan2017reduc,5) + lag(jan2017reduc_yellow,5) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_5_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+# lprice_net
+### TUNA
+tuna_net_lre_lag_5_sig_X <- plm(lprice_net ~ lag(jan2015reduc_tuna,5) + lag(jan2016reduc,5) + lag(jan2016reduc_tuna,5) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_5_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_5_sig_X <- plm(lprice_net ~  lag(jan2016reduc,5) + lag(jan2016reduc_olive,5) + lag(jan2017reduc,5) + lag(jan2017reduc_olive,5) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_5_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_5_sig_X <- plm(lprice_net ~  lag(jan2016reduc,5) + lag(jan2016reduc_yellow,5) + lag(jan2017reduc,5) + lag(jan2017reduc_yellow,5) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_5_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_5_sig_X <- plm(lprice_nom ~ lag(jan2015reduc_tuna,5) + lag(jan2016reduc,5) + lag(jan2016reduc_tuna,5) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_5_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_5_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,5) + lag(jan2016reduc_olive,5) + lag(jan2017reduc,5) + lag(jan2017reduc_olive,5) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_5_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_5_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,5) + lag(jan2016reduc_yellow,5) + lag(jan2017reduc,5) + lag(jan2017reduc_yellow,5) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker  , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_5_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+```
+
+### lag_6
+
+```{r only lag 6, include=TRUE}
+# lprice_net
+### TUNA
+tuna_net_lre_lag_6_sig <- plm(lprice_net ~ lag(jan2015reduc_tuna,6) + lag(jan2016reduc,6) + lag(jan2016reduc_tuna,6), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_6_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_6_sig <- plm(lprice_net ~  lag(jan2016reduc,6) + lag(jan2016reduc_olive,6) + lag(jan2017reduc,6) + lag(jan2017reduc_olive,6), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_6_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_6_sig <- plm(lprice_net ~  lag(jan2016reduc,6) + lag(jan2016reduc_yellow,6) + lag(jan2017reduc,6) + lag(jan2017reduc_yellow,6) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_6_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_6_sig <- plm(lprice_nom ~ lag(jan2015reduc_tuna,6) + lag(jan2016reduc,6) + lag(jan2016reduc_tuna,6), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_6_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_6_sig <- plm(lprice_nom ~  lag(jan2016reduc,6) + lag(jan2016reduc_olive,6) + lag(jan2017reduc,6) + lag(jan2017reduc_olive,6), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_6_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_6_sig <- plm(lprice_nom ~  lag(jan2016reduc,6) + lag(jan2016reduc_yellow,6) + lag(jan2017reduc,6) + lag(jan2017reduc_yellow,6) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_6_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+# With X's
+
+# lprice_net
+### TUNA
+tuna_net_lre_lag_6_sig_X <- plm(lprice_net ~ lag(jan2015reduc_tuna,6) + lag(jan2016reduc,6) + lag(jan2016reduc_tuna,6) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lag_6_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lag_6_sig_X <- plm(lprice_net ~  lag(jan2016reduc,6) + lag(jan2016reduc_olive,6) + lag(jan2017reduc,6) + lag(jan2017reduc_olive,6) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lag_6_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lag_6_sig_X <- plm(lprice_net ~  lag(jan2016reduc,6) + lag(jan2016reduc_yellow,6) + lag(jan2017reduc,6) + lag(jan2017reduc_yellow,6) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lag_6_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+# lprice_nom
+### TUNA
+tuna_nom_lre_lag_6_sig_X <- plm(lprice_nom ~ lag(jan2015reduc_tuna,6) + lag(jan2016reduc,6) + lag(jan2016reduc_tuna,6) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_lag_6_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_lag_6_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,6) + lag(jan2016reduc_olive,6) + lag(jan2017reduc,6) + lag(jan2017reduc_olive,6) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_nom_lre_lag_6_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_nom_lre_lag_6_sig_X <- plm(lprice_nom ~  lag(jan2016reduc,6) + lag(jan2016reduc_yellow,6) + lag(jan2017reduc,6) + lag(jan2017reduc_yellow,6)  + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_lag_6_sig_X, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+```
+
+### create tables diff-in-diff
+```{r create tables diff-in-diff , include=TRUE}
+library(estout)
+
+# append robust results function:
+append_robust_results <- function(number,the_model,output_file) {
+  robust_results<-data.frame(tidy(coeftest(the_model, vcov.=function(x) vcovHC(x,type="sss",cluster="group"))))
+  write.table(number, output_file, sep = ",", col.names = !file.exists(output_file), append = T)
+  write.table(robust_results, output_file, sep = ",", col.names = !file.exists(output_file), append = T)
+}
+### TUNA
+
+output_file_name <- "tuna_diff_in_diff.reg"
+output_file_name_csv <- paste0(output_file_name,'.csv')
+
+eststo(tuna_nom_lre_lags_sig)
+eststo(tuna_nom_lre_lead_1_sig)
+eststo(tuna_nom_lre_lead_2_sig)
+eststo(tuna_nom_lre_lag_1_sig)
+eststo(tuna_nom_lre_lag_2_sig)
+eststo(tuna_nom_lre_lag_3_sig)
+eststo(tuna_nom_lre_lag_4_sig)
+eststo(tuna_nom_lre_lag_5_sig)
+eststo(tuna_nom_lre_lag_6_sig)
+eststo(tuna_nom_lre_lags_sig_X)
+eststo(tuna_nom_lre_lead_1_sig_X)
+eststo(tuna_nom_lre_lead_2_sig_X)
+eststo(tuna_nom_lre_lag_1_sig_X)
+eststo(tuna_nom_lre_lag_2_sig_X)
+eststo(tuna_nom_lre_lag_3_sig_X)
+eststo(tuna_nom_lre_lag_4_sig_X)
+eststo(tuna_nom_lre_lag_5_sig_X)
+eststo(tuna_nom_lre_lag_6_sig_X)
+
+eststo(tuna_net_lre_lags_sig)
+eststo(tuna_net_lre_lead_1_sig)
+eststo(tuna_net_lre_lead_2_sig)
+eststo(tuna_net_lre_lag_1_sig)
+eststo(tuna_net_lre_lag_2_sig)
+eststo(tuna_net_lre_lag_3_sig)
+eststo(tuna_net_lre_lag_4_sig)
+eststo(tuna_net_lre_lag_5_sig)
+eststo(tuna_net_lre_lag_6_sig)
+eststo(tuna_net_lre_lags_sig_X)
+eststo(tuna_net_lre_lead_1_sig_X)
+eststo(tuna_net_lre_lead_2_sig_X)
+eststo(tuna_net_lre_lag_1_sig_X)
+eststo(tuna_net_lre_lag_2_sig_X)
+eststo(tuna_net_lre_lag_3_sig_X)
+eststo(tuna_net_lre_lag_4_sig_X)
+eststo(tuna_net_lre_lag_5_sig_X)
+eststo(tuna_net_lre_lag_6_sig_X)
+
+# Output regression table
+esttab(filename=output_file_name,csv=TRUE)
+estclear()
+# Append robust results
+append_robust_results(1,tuna_nom_lre_lags_sig,output_file_name_csv)
+append_robust_results(2,tuna_nom_lre_lead_1_sig,output_file_name_csv)
+append_robust_results(3,tuna_nom_lre_lead_2_sig,output_file_name_csv)
+append_robust_results(4,tuna_nom_lre_lag_1_sig,output_file_name_csv)
+append_robust_results(5,tuna_nom_lre_lag_2_sig,output_file_name_csv)
+append_robust_results(6,tuna_nom_lre_lag_3_sig,output_file_name_csv)
+append_robust_results(7,tuna_nom_lre_lag_4_sig,output_file_name_csv)
+append_robust_results(8,tuna_nom_lre_lag_5_sig,output_file_name_csv)
+append_robust_results(9,tuna_nom_lre_lag_6_sig,output_file_name_csv)
+append_robust_results(10,tuna_nom_lre_lags_sig_X,output_file_name_csv)
+append_robust_results(11,tuna_nom_lre_lead_1_sig_X,output_file_name_csv)
+append_robust_results(12,tuna_nom_lre_lead_2_sig_X,output_file_name_csv)
+append_robust_results(13,tuna_nom_lre_lag_1_sig_X,output_file_name_csv)
+append_robust_results(14,tuna_nom_lre_lag_2_sig_X,output_file_name_csv)
+append_robust_results(15,tuna_nom_lre_lag_3_sig_X,output_file_name_csv)
+append_robust_results(16,tuna_nom_lre_lag_4_sig_X,output_file_name_csv)
+append_robust_results(17,tuna_nom_lre_lag_5_sig_X,output_file_name_csv)
+append_robust_results(18,tuna_nom_lre_lag_6_sig_X,output_file_name_csv)
+
+append_robust_results(19,tuna_net_lre_lags_sig,output_file_name_csv)
+append_robust_results(20,tuna_net_lre_lead_1_sig,output_file_name_csv)
+append_robust_results(21,tuna_net_lre_lead_2_sig,output_file_name_csv)
+append_robust_results(22,tuna_net_lre_lag_1_sig,output_file_name_csv)
+append_robust_results(23,tuna_net_lre_lag_2_sig,output_file_name_csv)
+append_robust_results(24,tuna_net_lre_lag_3_sig,output_file_name_csv)
+append_robust_results(25,tuna_net_lre_lag_4_sig,output_file_name_csv)
+append_robust_results(26,tuna_net_lre_lag_5_sig,output_file_name_csv)
+append_robust_results(27,tuna_net_lre_lag_6_sig,output_file_name_csv)
+append_robust_results(28,tuna_net_lre_lags_sig_X,output_file_name_csv)
+append_robust_results(29,tuna_net_lre_lead_1_sig_X,output_file_name_csv)
+append_robust_results(30,tuna_net_lre_lead_2_sig_X,output_file_name_csv)
+append_robust_results(31,tuna_net_lre_lag_1_sig_X,output_file_name_csv)
+append_robust_results(32,tuna_net_lre_lag_2_sig_X,output_file_name_csv)
+append_robust_results(33,tuna_net_lre_lag_3_sig_X,output_file_name_csv)
+append_robust_results(34,tuna_net_lre_lag_4_sig_X,output_file_name_csv)
+append_robust_results(35,tuna_net_lre_lag_5_sig_X,output_file_name_csv)
+append_robust_results(36,tuna_net_lre_lag_6_sig_X,output_file_name_csv)
+
+### oil
+
+output_file_name <- "oil_diff_in_diff.reg"
+output_file_name_csv <- paste0(output_file_name,'.csv')
+
+eststo(oil_nom_lre_lags_sig)
+eststo(oil_nom_lre_lead_1_sig)
+eststo(oil_nom_lre_lead_2_sig)
+eststo(oil_nom_lre_lag_1_sig)
+eststo(oil_nom_lre_lag_2_sig)
+eststo(oil_nom_lre_lag_3_sig)
+eststo(oil_nom_lre_lag_4_sig)
+eststo(oil_nom_lre_lag_5_sig)
+eststo(oil_nom_lre_lag_6_sig)
+eststo(oil_nom_lre_lags_sig_X)
+eststo(oil_nom_lre_lead_1_sig_X)
+eststo(oil_nom_lre_lead_2_sig_X)
+eststo(oil_nom_lre_lag_1_sig_X)
+eststo(oil_nom_lre_lag_2_sig_X)
+eststo(oil_nom_lre_lag_3_sig_X)
+eststo(oil_nom_lre_lag_4_sig_X)
+eststo(oil_nom_lre_lag_5_sig_X)
+eststo(oil_nom_lre_lag_6_sig_X)
+
+eststo(oil_net_lre_lags_sig)
+eststo(oil_net_lre_lead_1_sig)
+eststo(oil_net_lre_lead_2_sig)
+eststo(oil_net_lre_lag_1_sig)
+eststo(oil_net_lre_lag_2_sig)
+eststo(oil_net_lre_lag_3_sig)
+eststo(oil_net_lre_lag_4_sig)
+eststo(oil_net_lre_lag_5_sig)
+eststo(oil_net_lre_lag_6_sig)
+eststo(oil_net_lre_lags_sig_X)
+eststo(oil_net_lre_lead_1_sig_X)
+eststo(oil_net_lre_lead_2_sig_X)
+eststo(oil_net_lre_lag_1_sig_X)
+eststo(oil_net_lre_lag_2_sig_X)
+eststo(oil_net_lre_lag_3_sig_X)
+eststo(oil_net_lre_lag_4_sig_X)
+eststo(oil_net_lre_lag_5_sig_X)
+eststo(oil_net_lre_lag_6_sig_X)
+
+# Output regression table
+esttab(filename=output_file_name,csv=TRUE)
+estclear()
+# Append robust results
+append_robust_results(1,oil_nom_lre_lags_sig,output_file_name_csv)
+append_robust_results(2,oil_nom_lre_lead_1_sig,output_file_name_csv)
+append_robust_results(3,oil_nom_lre_lead_2_sig,output_file_name_csv)
+append_robust_results(4,oil_nom_lre_lag_1_sig,output_file_name_csv)
+append_robust_results(5,oil_nom_lre_lag_2_sig,output_file_name_csv)
+append_robust_results(6,oil_nom_lre_lag_3_sig,output_file_name_csv)
+append_robust_results(7,oil_nom_lre_lag_4_sig,output_file_name_csv)
+append_robust_results(8,oil_nom_lre_lag_5_sig,output_file_name_csv)
+append_robust_results(9,oil_nom_lre_lag_6_sig,output_file_name_csv)
+append_robust_results(10,oil_nom_lre_lags_sig_X,output_file_name_csv)
+append_robust_results(11,oil_nom_lre_lead_1_sig_X,output_file_name_csv)
+append_robust_results(12,oil_nom_lre_lead_2_sig_X,output_file_name_csv)
+append_robust_results(13,oil_nom_lre_lag_1_sig_X,output_file_name_csv)
+append_robust_results(14,oil_nom_lre_lag_2_sig_X,output_file_name_csv)
+append_robust_results(15,oil_nom_lre_lag_3_sig_X,output_file_name_csv)
+append_robust_results(16,oil_nom_lre_lag_4_sig_X,output_file_name_csv)
+append_robust_results(17,oil_nom_lre_lag_5_sig_X,output_file_name_csv)
+append_robust_results(18,oil_nom_lre_lag_6_sig_X,output_file_name_csv)
+
+append_robust_results(19,oil_net_lre_lags_sig,output_file_name_csv)
+append_robust_results(20,oil_net_lre_lead_1_sig,output_file_name_csv)
+append_robust_results(21,oil_net_lre_lead_2_sig,output_file_name_csv)
+append_robust_results(22,oil_net_lre_lag_1_sig,output_file_name_csv)
+append_robust_results(23,oil_net_lre_lag_2_sig,output_file_name_csv)
+append_robust_results(24,oil_net_lre_lag_3_sig,output_file_name_csv)
+append_robust_results(25,oil_net_lre_lag_4_sig,output_file_name_csv)
+append_robust_results(26,oil_net_lre_lag_5_sig,output_file_name_csv)
+append_robust_results(27,oil_net_lre_lag_6_sig,output_file_name_csv)
+append_robust_results(28,oil_net_lre_lags_sig_X,output_file_name_csv)
+append_robust_results(29,oil_net_lre_lead_1_sig_X,output_file_name_csv)
+append_robust_results(30,oil_net_lre_lead_2_sig_X,output_file_name_csv)
+append_robust_results(31,oil_net_lre_lag_1_sig_X,output_file_name_csv)
+append_robust_results(32,oil_net_lre_lag_2_sig_X,output_file_name_csv)
+append_robust_results(33,oil_net_lre_lag_3_sig_X,output_file_name_csv)
+append_robust_results(34,oil_net_lre_lag_4_sig_X,output_file_name_csv)
+append_robust_results(35,oil_net_lre_lag_5_sig_X,output_file_name_csv)
+append_robust_results(36,oil_net_lre_lag_6_sig_X,output_file_name_csv)
+
+### Cheese
+
+
+output_file_name <- "cheese_diff_in_diff.reg"
+output_file_name_csv <- paste0(output_file_name,'.csv')
+
+eststo(cheese_nom_lre_lags_sig)
+eststo(cheese_nom_lre_lead_1_sig)
+eststo(cheese_nom_lre_lead_2_sig)
+eststo(cheese_nom_lre_lag_1_sig)
+eststo(cheese_nom_lre_lag_2_sig)
+eststo(cheese_nom_lre_lag_3_sig)
+eststo(cheese_nom_lre_lag_4_sig)
+eststo(cheese_nom_lre_lag_5_sig)
+eststo(cheese_nom_lre_lag_6_sig)
+eststo(cheese_nom_lre_lags_sig_X)
+eststo(cheese_nom_lre_lead_1_sig_X)
+eststo(cheese_nom_lre_lead_2_sig_X)
+eststo(cheese_nom_lre_lag_1_sig_X)
+eststo(cheese_nom_lre_lag_2_sig_X)
+eststo(cheese_nom_lre_lag_3_sig_X)
+eststo(cheese_nom_lre_lag_4_sig_X)
+eststo(cheese_nom_lre_lag_5_sig_X)
+eststo(cheese_nom_lre_lag_6_sig_X)
+
+eststo(cheese_net_lre_lags_sig)
+eststo(cheese_net_lre_lead_1_sig)
+eststo(cheese_net_lre_lead_2_sig)
+eststo(cheese_net_lre_lag_1_sig)
+eststo(cheese_net_lre_lag_2_sig)
+eststo(cheese_net_lre_lag_3_sig)
+eststo(cheese_net_lre_lag_4_sig)
+eststo(cheese_net_lre_lag_5_sig)
+eststo(cheese_net_lre_lag_6_sig)
+eststo(cheese_net_lre_lags_sig_X)
+eststo(cheese_net_lre_lead_1_sig_X)
+eststo(cheese_net_lre_lead_2_sig_X)
+eststo(cheese_net_lre_lag_1_sig_X)
+eststo(cheese_net_lre_lag_2_sig_X)
+eststo(cheese_net_lre_lag_3_sig_X)
+eststo(cheese_net_lre_lag_4_sig_X)
+eststo(cheese_net_lre_lag_5_sig_X)
+eststo(cheese_net_lre_lag_6_sig_X)
+
+# Output regression table
+esttab(filename=output_file_name,csv=TRUE)
+estclear()
+# Append robust results
+append_robust_results(1,cheese_nom_lre_lags_sig,output_file_name_csv)
+append_robust_results(2,cheese_nom_lre_lead_1_sig,output_file_name_csv)
+append_robust_results(3,cheese_nom_lre_lead_2_sig,output_file_name_csv)
+append_robust_results(4,cheese_nom_lre_lag_1_sig,output_file_name_csv)
+append_robust_results(5,cheese_nom_lre_lag_2_sig,output_file_name_csv)
+append_robust_results(6,cheese_nom_lre_lag_3_sig,output_file_name_csv)
+append_robust_results(7,cheese_nom_lre_lag_4_sig,output_file_name_csv)
+append_robust_results(8,cheese_nom_lre_lag_5_sig,output_file_name_csv)
+append_robust_results(9,cheese_nom_lre_lag_6_sig,output_file_name_csv)
+append_robust_results(10,cheese_nom_lre_lags_sig_X,output_file_name_csv)
+append_robust_results(11,cheese_nom_lre_lead_1_sig_X,output_file_name_csv)
+append_robust_results(12,cheese_nom_lre_lead_2_sig_X,output_file_name_csv)
+append_robust_results(13,cheese_nom_lre_lag_1_sig_X,output_file_name_csv)
+append_robust_results(14,cheese_nom_lre_lag_2_sig_X,output_file_name_csv)
+append_robust_results(15,cheese_nom_lre_lag_3_sig_X,output_file_name_csv)
+append_robust_results(16,cheese_nom_lre_lag_4_sig_X,output_file_name_csv)
+append_robust_results(17,cheese_nom_lre_lag_5_sig_X,output_file_name_csv)
+append_robust_results(18,cheese_nom_lre_lag_6_sig_X,output_file_name_csv)
+
+append_robust_results(19,cheese_net_lre_lags_sig,output_file_name_csv)
+append_robust_results(20,cheese_net_lre_lead_1_sig,output_file_name_csv)
+append_robust_results(21,cheese_net_lre_lead_2_sig,output_file_name_csv)
+append_robust_results(22,cheese_net_lre_lag_1_sig,output_file_name_csv)
+append_robust_results(23,cheese_net_lre_lag_2_sig,output_file_name_csv)
+append_robust_results(24,cheese_net_lre_lag_3_sig,output_file_name_csv)
+append_robust_results(25,cheese_net_lre_lag_4_sig,output_file_name_csv)
+append_robust_results(26,cheese_net_lre_lag_5_sig,output_file_name_csv)
+append_robust_results(27,cheese_net_lre_lag_6_sig,output_file_name_csv)
+append_robust_results(28,cheese_net_lre_lags_sig_X,output_file_name_csv)
+append_robust_results(29,cheese_net_lre_lead_1_sig_X,output_file_name_csv)
+append_robust_results(30,cheese_net_lre_lead_2_sig_X,output_file_name_csv)
+append_robust_results(31,cheese_net_lre_lag_1_sig_X,output_file_name_csv)
+append_robust_results(32,cheese_net_lre_lag_2_sig_X,output_file_name_csv)
+append_robust_results(33,cheese_net_lre_lag_3_sig_X,output_file_name_csv)
+append_robust_results(34,cheese_net_lre_lag_4_sig_X,output_file_name_csv)
+append_robust_results(35,cheese_net_lre_lag_5_sig_X,output_file_name_csv)
+append_robust_results(36,cheese_net_lre_lag_6_sig_X,output_file_name_csv)
+```
+
+## diff-in-diff-in-diff (With import)
+
+```{r regular diff-in-diff , include=TRUE}
+# create different datasets for every year, since we are unable to run both tarrif reductions together
+## 1st tarrif reduction:
+tuna_signif_before_2016 <- subset(tuna_signif,year<2016)
+oil_signif_before_2017 <- subset(oil_signif,year<2017)
+cheese_signif_before_2017 <- subset(cheese_signif,year<2017)
+## 2st tarrif reduction:
+tuna_signif_after_2014 <- subset(tuna_signif,year>2014)
+oil_signif_after_2015 <- subset(oil_signif,year>2015)
+cheese_signif_after_2015 <- subset(cheese_signif,year>2015)
+##lprice_net
+### TUNA
+tuna_net_lre_import_2015 <- plm(lprice_net ~ jan2015reduc + jan2015reduc_tuna +  jan2015reduc_tuna_import, data = tuna_signif_before_2016, effect="twoways",model = "random")
+coeftest(tuna_net_lre_import_2015, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+tuna_net_lre_import_2016 <- plm(lprice_net ~ jan2016reduc + jan2016reduc_tuna +  jan2016reduc_tuna_import, data = tuna_signif_after_2014, effect="twoways",model = "random")
+coeftest(tuna_net_lre_import_2016, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_import_2016 <- plm(lprice_net ~  jan2016reduc + jan2016reduc_olive + jan2016reduc_olive_import, data = oil_signif_before_2017, effect="twoways",model = "random")
+coeftest(oil_net_lre_import_2016, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_net_lre_import_2017 <- plm(lprice_net ~  jan2017reduc + jan2017reduc_olive + jan2017reduc_olive_import, data = oil_signif_after_2015, effect="twoways",model = "random")
+coeftest(oil_net_lre_import_2017, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### cheese
+cheese_net_lre_import_2016 <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2016reduc_yellow_import, data = cheese_signif_signif_before_2017, effect="twoways",model = "random")
+coeftest(cheese_net_lre_import_2016, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_net_lre_import_2017 <- plm(lprice_net ~  jan2017reduc + jan2017reduc_yellow + jan2017reduc_yellow_import, data = cheese_signif_signif_after_2015, effect="twoways",model = "random")
+coeftest(cheese_net_lre_import_2017, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+##lprice_nom
+### TUNA
+tuna_nom_lre_import_2015 <- plm(lprice_nom ~ jan2015reduc + jan2015reduc_tuna +  jan2015reduc_tuna_import, data = tuna_signif_before_2016, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_import_2015, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+tuna_nom_lre_import_2016 <- plm(lprice_nom ~ jan2016reduc + jan2016reduc_tuna +  jan2016reduc_tuna_import, data = tuna_signif_after_2014, effect="twoways",model = "random")
+coeftest(tuna_nom_lre_import_2016, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_nom_lre_import_2016 <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_olive + jan2016reduc_olive_import, data = oil_signif_before_2017, effect="twoways",model = "random")
+coeftest(oil_nom_lre_import_2016, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+oil_nom_lre_import_2017 <- plm(lprice_nom ~  jan2017reduc + jan2017reduc_olive + jan2017reduc_olive_import, data = oil_signif_after_2015, effect="twoways",model = "random")
+coeftest(oil_nom_lre_import_2017, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### cheese
+cheese_nom_lre_import_2016 <- plm(lprice_nom ~  jan2016reduc + jan2016reduc_yellow + jan2016reduc_yellow_import, data = cheese_signif_signif_before_2017, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_import_2016, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+cheese_nom_lre_import_2017 <- plm(lprice_nom ~  jan2017reduc + jan2017reduc_yellow + jan2017reduc_yellow_import, data = cheese_signif_signif_after_2015, effect="twoways",model = "random")
+coeftest(cheese_nom_lre_import_2017, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+
+
+
+```
+
+
+
+
+### regular model 
+
+```{r regular with import , include=TRUE}
+### TUNA
+tuna_net_lre_lags_sig <- plm(lprice_net ~ jan2015reduc_tuna  + jan2016reduc + jan2016reduc_tuna + jan2016reduc_tuna_import, data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_sig <- plm(lprice_net ~  jan2016reduc + jan2016reduc_olive + jan2016reduc_olive_import + jan2017reduc + jan2017reduc_olive + jan2017reduc_olive_import, data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig <- plm(lprice_net ~  jan2016reduc + jan2016reduc_yellow + jan2016reduc_yellow_import + jan2017reduc + jan2017reduc_yellow + jan2016reduc_yellow_import, data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+## Only lag 1
+
+```{r only lag 1 with import, include=TRUE}
+### TUNA
+tuna_net_lre_lags_sig <- plm(lprice_net ~ lag(jan2015reduc_tuna,1)  + lag(jan2016reduc,1) + lag(jan2016reduc_tuna,1) + lag(jan2016reduc_tuna_import,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_sig <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2016reduc_olive,1) + lag(jan2016reduc_olive_import,1) + lag(jan2017reduc,1) + lag(jan2017reduc_olive,1) + lag(jan2017reduc_olive_import,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2016reduc_yellow,1) + lag(jan2016reduc_yellow_import,1) + lag(jan2017reduc,1) + lag(jan2017reduc_yellow,1) + lag(jan2016reduc_yellow_import,1), data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+## Only Lead
+
+```{r only lead with import, include=TRUE}
+### TUNA
+tuna_net_lre_lags_sig <- plm(lprice_net ~ lead(jan2015reduc_tuna,1) + lead(jan2016reduc,1) + lead(jan2016reduc_tuna,1) + lead(jan2016reduc_tuna_import,1), data = tuna_signif, effect="twoways",model = "random")
+coeftest(tuna_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+### OIL
+oil_net_lre_lags_sig <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2016reduc_olive,1) + + lead(jan2016reduc_olive_import,1) + lead(jan2017reduc,1) + lead(jan2017reduc_olive,1) + lead(jan2017reduc_olive_import,1), data = oil_signif, effect="twoways",model = "random") 
+coeftest(oil_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+## Cheese
+cheese_net_lre_lags_sig <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2016reduc_yellow,1) + lead(jan2016reduc_yellow_import,1) + lead(jan2017reduc,1) + lead(jan2017reduc_yellow,1) + lead(jan2016reduc_yellow_import,1) , data = cheese_signif, effect="twoways",model = "random")
+coeftest(cheese_net_lre_lags_sig, vcov.=function(x) vcovHC(x, type="sss",cluster="group"))
+```
+
+# Simple model
+
+
+```{r simple model tuna random effects , include=TRUE}
+library(estout)
+
+# append robust results function:
+append_robust_results <- function(number,the_model,output_file) {
+  robust_results<-data.frame(tidy(coeftest(the_model, vcov.=function(x) vcovHC(x,type="sss",cluster="group"))))
+  write.table(number, output_file, sep = ",", col.names = !file.exists(output_file), append = T)
+  write.table(robust_results, output_file, sep = ",", col.names = !file.exists(output_file), append = T)
+}
+
+
+output_file_name <- "tuna_simple.reg"
+output_file_name_csv <- paste0(output_file_name,'.csv')
+
+estclear()
+
+# Tuna pre-process
+tuna_without_sardin <- subset(tuna_signif,!(sardin==1))
+tuna_without_sardin$lsalary_industry_worker<-log(tuna_without_sardin$salary_industry_worker)
+
+## 1. price not full 
+tuna_without_sardin_model1 <- plm(lprice_nom ~  jan2015reduc + jan2016reduc, data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model1)
+## 2. price 1 lead not full
+tuna_without_sardin_model2 <- plm(lprice_nom ~  lead(jan2015reduc,1) + lead(jan2016reduc,1), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model2)
+## 3. price 2 lead not full
+tuna_without_sardin_model3 <- plm(lprice_nom ~  lead(jan2015reduc,2) + lead(jan2016reduc,2), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model3)
+## 4. price not full 1 lag
+tuna_without_sardin_model4 <- plm(lprice_nom ~  lag(jan2015reduc,1) + lag(jan2016reduc,1), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model4)
+## 5. price not full 2 lag
+tuna_without_sardin_model5 <- plm(lprice_nom ~  lag(jan2015reduc,2) + lag(jan2016reduc,2), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model5)
+## 6. price not full 3 lag
+tuna_without_sardin_model6 <- plm(lprice_nom ~  lag(jan2015reduc,3) + lag(jan2016reduc,3), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model6)
+## 7. price not full 4 lag
+tuna_without_sardin_model7 <- plm(lprice_nom ~  lag(jan2015reduc,4) + lag(jan2016reduc,4), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model7)
+## 8. price not full 5 lag
+tuna_without_sardin_model8 <- plm(lprice_nom ~  lag(jan2015reduc,5) + lag(jan2016reduc,5), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model8)
+## 9. price not full 6 lag
+tuna_without_sardin_model9 <- plm(lprice_nom ~  lag(jan2015reduc,6) + lag(jan2016reduc,6), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model9)
+
+## 10. price full 
+tuna_without_sardin_model10 <- plm(lprice_nom ~  jan2015reduc + jan2016reduc + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model10)
+## 11. price 1 lead full
+tuna_without_sardin_model11 <- plm(lprice_nom ~  lead(jan2015reduc,1) + lead(jan2016reduc,1) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model11)
+## 12. price 2 lead full
+tuna_without_sardin_model12 <- plm(lprice_nom ~  lead(jan2015reduc,2) + lead(jan2016reduc,2) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model12)
+## 13. price full 1 lag
+tuna_without_sardin_model13 <- plm(lprice_nom ~  lag(jan2015reduc,1) + lag(jan2016reduc,1) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model13)
+## 14. price full 2 lag
+tuna_without_sardin_model14 <- plm(lprice_nom ~  lag(jan2015reduc,2) + lag(jan2016reduc,2) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model14)
+## 15. price full 3 lag
+tuna_without_sardin_model15 <- plm(lprice_nom ~  lag(jan2015reduc,3) + lag(jan2016reduc,3) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model15)
+## 16. price full 4 lag
+tuna_without_sardin_model16 <- plm(lprice_nom ~  lag(jan2015reduc,4) + lag(jan2016reduc,4) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model16)
+## 17. price full 5 lag
+tuna_without_sardin_model17 <- plm(lprice_nom ~  lag(jan2015reduc,5) + lag(jan2016reduc,5) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model17)
+## 18. price full 6 lag
+tuna_without_sardin_model18 <- plm(lprice_nom ~  lag(jan2015reduc,6) + lag(jan2016reduc,6) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model18)
+
+## 19. price_net not full 
+tuna_without_sardin_model19 <- plm(lprice_net ~  jan2015reduc + jan2016reduc, data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model19)
+## 20. price_net 2 lead not full
+tuna_without_sardin_model20 <- plm(lprice_net ~  lead(jan2015reduc,2) + lead(jan2016reduc,2), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model20)
+## 21. price_net 1 lead not full
+tuna_without_sardin_model21 <- plm(lprice_net ~  lead(jan2015reduc,1) + lead(jan2016reduc,1), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model21)
+## 22. price_net not full 1 lag
+tuna_without_sardin_model22 <- plm(lprice_net ~  lag(jan2015reduc,1) + lag(jan2016reduc,1), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model22)
+## 23. price_net not full 2 lag
+tuna_without_sardin_model23 <- plm(lprice_net ~  lag(jan2015reduc,2) + lag(jan2016reduc,2), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model23)
+## 24. price_net not full 3 lag
+tuna_without_sardin_model24 <- plm(lprice_net ~  lag(jan2015reduc,3) + lag(jan2016reduc,3), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model24)
+## 25. price_net not full 4 lag
+tuna_without_sardin_model25 <- plm(lprice_net ~  lag(jan2015reduc,4) + lag(jan2016reduc,4), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model25)
+## 26. price_net not full 5 lag
+tuna_without_sardin_model26 <- plm(lprice_net ~  lag(jan2015reduc,5) + lag(jan2016reduc,5), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model26)
+## 27. price_net not full 6 lag
+tuna_without_sardin_model27 <- plm(lprice_net ~  lag(jan2015reduc,6) + lag(jan2016reduc,6), data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model27)
+
+## 28. price_net full 
+tuna_without_sardin_model28 <- plm(lprice_net ~  jan2015reduc + jan2016reduc + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model28)
+## 29. price_net 2 lead full
+tuna_without_sardin_model29 <- plm(lprice_net ~  lead(jan2015reduc,2) + lead(jan2016reduc,2) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model29)
+## 30. price_net 1 lead full
+tuna_without_sardin_model30 <- plm(lprice_net ~  lead(jan2015reduc,1) + lead(jan2016reduc,1) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model30)
+## 31. price_net full 1 lag
+tuna_without_sardin_model31 <- plm(lprice_net ~  lag(jan2015reduc,1) + lag(jan2016reduc,1) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model31)
+## 32. price_net full 2 lag
+tuna_without_sardin_model32 <- plm(lprice_net ~  lag(jan2015reduc,2) + lag(jan2016reduc,2) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model32)
+## 33. price_net full 3 lag
+tuna_without_sardin_model33 <- plm(lprice_net ~  lag(jan2015reduc,3) + lag(jan2016reduc,3) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model33)
+## 34. price_net full 4 lag
+tuna_without_sardin_model34 <- plm(lprice_net ~  lag(jan2015reduc,4) + lag(jan2016reduc,4) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model34)
+## 35. price_net full 5 lag
+tuna_without_sardin_model35 <- plm(lprice_net ~  lag(jan2015reduc,5) + lag(jan2016reduc,5) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model35)
+## 36. price_net full 6 lag
+tuna_without_sardin_model36 <- plm(lprice_net ~  lag(jan2015reduc,6) + lag(jan2016reduc,6) + proccess_fish_p2012 + lvalue_added_tax + lsalary_industry_worker , data = tuna_without_sardin, effect="individual",model = "random")
+eststo(tuna_without_sardin_model36)
+
+# Output regression table
+esttab(filename=output_file_name,csv=TRUE)
+estclear()
+# Append robust results
+for (i in 1:36) {
+ append_robust_results(i,get(paste0("tuna_without_sardin_model",i)),output_file_name_csv)
+}
+
+
+```
+
+
+```{r simple model oil random effects , include=TRUE}
+library(estout)
+
+output_file_name <- "oilasdasdasd_simple.reg"
+output_file_name_csv <- paste0(output_file_name,'.csv')
+
+estclear()
+
+# oil pre-process
+oil_without_canola <- subset(oil_signif,!(cooking_oil==1))
+oil_without_canola$lsalary_industry_worker<-log(oil_without_canola$salary_industry_worker)
+
+## 1. price not full 
+oil_without_canola_model1 <- plm(lprice_nom ~  jan2016reduc + jan2017reduc, data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model1)
+## 2. price 1 lead not full
+oil_without_canola_model2 <- plm(lprice_nom ~  lead(jan2016reduc,1) + lead(jan2017reduc,1), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model2)
+## 3. price 2 lead not full
+oil_without_canola_model3 <- plm(lprice_nom ~  lead(jan2016reduc,2) + lead(jan2017reduc,2), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model3)
+## 4. price not full 1 lag
+oil_without_canola_model4 <- plm(lprice_nom ~  lag(jan2016reduc,1) + lag(jan2017reduc,1), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model4)
+## 5. price not full 2 lag
+oil_without_canola_model5 <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2017reduc,2), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model5)
+## 6. price not full 3 lag
+oil_without_canola_model6 <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2017reduc,3), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model6)
+## 7. price not full 4 lag
+oil_without_canola_model7 <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2017reduc,4), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model7)
+## 8. price not full 5 lag
+oil_without_canola_model8 <- plm(lprice_nom ~  lag(jan2016reduc,5) + lag(jan2017reduc,5), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model8)
+## 9. price not full 6 lag
+oil_without_canola_model9 <- plm(lprice_nom ~  lag(jan2016reduc,6) + lag(jan2017reduc,6), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model9)
+
+## 10. price full 
+oil_without_canola_model10 <- plm(lprice_nom ~  jan2016reduc + jan2017reduc + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model10)
+## 11. price 1 lead full
+oil_without_canola_model11 <- plm(lprice_nom ~  lead(jan2016reduc,1) + lead(jan2017reduc,1) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model11)
+## 12. price 2 lead full
+oil_without_canola_model12 <- plm(lprice_nom ~  lead(jan2016reduc,2) + lead(jan2017reduc,2) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model12)
+## 13. price full 1 lag
+oil_without_canola_model13 <- plm(lprice_nom ~  lag(jan2016reduc,1) + lag(jan2017reduc,1) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model13)
+## 14. price full 2 lag
+oil_without_canola_model14 <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2017reduc,2) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model14)
+## 15. price full 3 lag
+oil_without_canola_model15 <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2017reduc,3) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model15)
+## 16. price full 4 lag
+oil_without_canola_model16 <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2017reduc,4) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model16)
+## 17. price full 5 lag
+oil_without_canola_model17 <- plm(lprice_nom ~  lag(jan2016reduc,5) + lag(jan2017reduc,5) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model17)
+## 18. price full 6 lag
+oil_without_canola_model18 <- plm(lprice_nom ~  lag(jan2016reduc,6) + lag(jan2017reduc,6) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model18)
+
+## 19. price_net not full 
+oil_without_canola_model19 <- plm(lprice_net ~  jan2016reduc + jan2017reduc, data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model19)
+## 20. price_net 2 lead not full
+oil_without_canola_model20 <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2017reduc,1), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model20)
+## 21. price_net 1 lead not full
+oil_without_canola_model21 <- plm(lprice_net ~  lead(jan2016reduc,2) + lead(jan2017reduc,2), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model21)
+## 22. price_net not full 1 lag
+oil_without_canola_model22 <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2017reduc,1), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model22)
+## 23. price_net not full 2 lag
+oil_without_canola_model23 <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2017reduc,2), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model23)
+## 24. price_net not full 3 lag
+oil_without_canola_model24 <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2017reduc,3), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model24)
+## 25. price_net not full 4 lag
+oil_without_canola_model25 <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2017reduc,4), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model25)
+## 26. price_net not full 5 lag
+oil_without_canola_model26 <- plm(lprice_net ~  lag(jan2016reduc,5) + lag(jan2017reduc,5), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model26)
+## 27. price_net not full 6 lag
+oil_without_canola_model27 <- plm(lprice_net ~  lag(jan2016reduc,6) + lag(jan2017reduc,6), data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model27)
+
+## 28. price_net full 
+oil_without_canola_model28 <- plm(lprice_net ~  jan2016reduc + jan2017reduc + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model28)
+## 29. price_net 2 lead full
+oil_without_canola_model29 <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2017reduc,2) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model29)
+## 30. price_net 1 lead full
+oil_without_canola_model30 <- plm(lprice_net ~  lead(jan2016reduc,2) + lead(jan2017reduc,1) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model30)
+## 31. price_net full 1 lag
+oil_without_canola_model31 <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2017reduc,1) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model31)
+## 32. price_net full 2 lag
+oil_without_canola_model32 <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2017reduc,2) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model32)
+## 33. price_net full 3 lag
+oil_without_canola_model33 <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2017reduc,3) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model33)
+## 34. price_net full 4 lag
+oil_without_canola_model34 <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2017reduc,4) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model34)
+## 35. price_net full 5 lag
+oil_without_canola_model35 <- plm(lprice_net ~  lag(jan2016reduc,5) + lag(jan2017reduc,5) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model35)
+## 36. price_net full 6 lag
+oil_without_canola_model36 <- plm(lprice_net ~  lag(jan2016reduc,6) + lag(jan2017reduc,6) + proccess_oil_p2012 + lvalue_added_tax + lsalary_industry_worker , data = oil_without_canola, effect="individual",model = "random")
+eststo(oil_without_canola_model36)
+
+# Output regression table
+esttab(filename=output_file_name,csv=TRUE)
+estclear()
+# Append robust results
+for (i in 1:36) {
+ append_robust_results(i,get(paste0("oil_without_canola_model",i)),output_file_name_csv)
+}
+
+
+```
+
+```{r simple model cheese random effects , include=TRUE}
+library(estout)
+
+output_file_name <- "cheese_simple.reg"
+output_file_name_csv <- paste0(output_file_name,'.csv')
+
+estclear()
+
+# cheese pre-process
+#cheese_signif <- subset(cheese,date_n<382017)
+cheese_without_white_cheese <- subset(cheese_signif,!(white_cheese==1))
+cheese_without_white_cheese$lsalary_industry_worker<-log(cheese_without_white_cheese$salary_industry_worker)
+
+
+## 1. price not full 
+cheese_without_white_cheese_model1 <- plm(lprice_nom ~  jan2016reduc + jan2017reduc, data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model1)
+## 2. price 1 lead not full
+cheese_without_white_cheese_model2 <- plm(lprice_nom ~  lead(jan2016reduc,1) + lead(jan2017reduc,1), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model2)
+## 3. price 2 lead not full
+cheese_without_white_cheese_model3 <- plm(lprice_nom ~  lead(jan2016reduc,2) + lead(jan2017reduc,2), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model3)
+## 4. price not full 1 lag
+cheese_without_white_cheese_model4 <- plm(lprice_nom ~  lag(jan2016reduc,1) + lag(jan2017reduc,1), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model4)
+## 5. price not full 2 lag
+cheese_without_white_cheese_model5 <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2017reduc,2), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model5)
+## 6. price not full 3 lag
+cheese_without_white_cheese_model6 <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2017reduc,3), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model6)
+## 7. price not full 4 lag
+cheese_without_white_cheese_model7 <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2017reduc,4), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model7)
+## 8. price not full 5 lag
+cheese_without_white_cheese_model8 <- plm(lprice_nom ~  lag(jan2016reduc,5) + lag(jan2017reduc,5), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model8)
+## 9. price not full 6 lag
+cheese_without_white_cheese_model9 <- plm(lprice_nom ~  lag(jan2016reduc,6) + lag(jan2017reduc,6), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model9)
+
+## 10. price full 
+cheese_without_white_cheese_model10 <- plm(lprice_nom ~  jan2016reduc + jan2017reduc + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model10)
+## 11. price 1 lead full
+cheese_without_white_cheese_model11 <- plm(lprice_nom ~  lead(jan2016reduc,1) + lead(jan2017reduc,1) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model11)
+## 12. price 2 lead full
+cheese_without_white_cheese_model12 <- plm(lprice_nom ~  lead(jan2016reduc,2) + lead(jan2017reduc,2) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model12)
+## 13. price full 1 lag
+cheese_without_white_cheese_model13 <- plm(lprice_nom ~  lag(jan2016reduc,1) + lag(jan2017reduc,1) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model13)
+## 14. price full 2 lag
+cheese_without_white_cheese_model14 <- plm(lprice_nom ~  lag(jan2016reduc,2) + lag(jan2017reduc,2) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model14)
+## 15. price full 3 lag
+cheese_without_white_cheese_model15 <- plm(lprice_nom ~  lag(jan2016reduc,3) + lag(jan2017reduc,3) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model15)
+## 16. price full 4 lag
+cheese_without_white_cheese_model16 <- plm(lprice_nom ~  lag(jan2016reduc,4) + lag(jan2017reduc,4) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model16)
+## 17. price full 5 lag
+cheese_without_white_cheese_model17 <- plm(lprice_nom ~  lag(jan2016reduc,5) + lag(jan2017reduc,5) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model17)
+## 18. price full 6 lag
+cheese_without_white_cheese_model18 <- plm(lprice_nom ~  lag(jan2016reduc,6) + lag(jan2017reduc,6) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model18)
+
+## 19. price_net not full 
+cheese_without_white_cheese_model19 <- plm(lprice_net ~  jan2016reduc + jan2017reduc, data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model19)
+## 20. price_net 2 lead not full
+cheese_without_white_cheese_model20 <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2017reduc,1), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model20)
+## 21. price_net 1 lead not full
+cheese_without_white_cheese_model21 <- plm(lprice_net ~  lead(jan2016reduc,2) + lead(jan2017reduc,2), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model21)
+## 22. price_net not full 1 lag
+cheese_without_white_cheese_model22 <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2017reduc,1), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model22)
+## 23. price_net not full 2 lag
+cheese_without_white_cheese_model23 <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2017reduc,2), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model23)
+## 24. price_net not full 3 lag
+cheese_without_white_cheese_model24 <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2017reduc,3), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model24)
+## 25. price_net not full 4 lag
+cheese_without_white_cheese_model25 <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2017reduc,4), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model25)
+## 26. price_net not full 5 lag
+cheese_without_white_cheese_model26 <- plm(lprice_net ~  lag(jan2016reduc,5) + lag(jan2017reduc,5), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model26)
+## 27. price_net not full 6 lag
+cheese_without_white_cheese_model27 <- plm(lprice_net ~  lag(jan2016reduc,6) + lag(jan2017reduc,6), data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model27)
+
+## 28. price_net full 
+cheese_without_white_cheese_model28 <- plm(lprice_net ~  jan2016reduc + jan2017reduc + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model28)
+## 29. price_net 1 lead full
+cheese_without_white_cheese_model29 <- plm(lprice_net ~  lead(jan2016reduc,1) + lead(jan2017reduc,1) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model29)
+## 30. price_net 2 lead full
+cheese_without_white_cheese_model30 <- plm(lprice_net ~  lead(jan2016reduc,2) + lead(jan2017reduc,2) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model30)
+## 31. price_net full 1 lag
+cheese_without_white_cheese_model31 <- plm(lprice_net ~  lag(jan2016reduc,1) + lag(jan2017reduc,1) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model31)
+## 32. price_net full 2 lag
+cheese_without_white_cheese_model32 <- plm(lprice_net ~  lag(jan2016reduc,2) + lag(jan2017reduc,2) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model32)
+## 33. price_net full 3 lag
+cheese_without_white_cheese_model33 <- plm(lprice_net ~  lag(jan2016reduc,3) + lag(jan2017reduc,3) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model33)
+## 34. price_net full 4 lag
+cheese_without_white_cheese_model34 <- plm(lprice_net ~  lag(jan2016reduc,4) + lag(jan2017reduc,4) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model34)
+## 35. price_net full 5 lag
+cheese_without_white_cheese_model35 <- plm(lprice_net ~  lag(jan2016reduc,5) + lag(jan2017reduc,5) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model35)
+## 36. price_net full 6 lag
+cheese_without_white_cheese_model36 <- plm(lprice_net ~  lag(jan2016reduc,6) + lag(jan2017reduc,6) + proccess_milk_products_p2012+ lvalue_added_tax + lsalary_industry_worker , data = cheese_signif_without_white_cheese, effect="individual",model = "random")
+eststo(cheese_without_white_cheese_model36)
+
+# Output regression table
+esttab(filename=output_file_name,csv=TRUE)
+estclear()
+# Append robust results
+for (i in 1:36) {
+ append_robust_results(i,get(paste0("cheese_without_white_cheese_model",i)),output_file_name_csv)
+}
+
+
+```
+
+```{r diff-in-diff model tuna random effects , include=TRUE}
+library(estout)
+
+output_file_name <- "tuna_diff.reg"
+output_file_name_csv <- paste0(output_file_name,'.csv')
+
+estclear()
+
+eststo(tuna_nom_lre_lags_sig)
+eststo(tuna_nom_lre_lead_1_sig)
+eststo(tuna_nom_lre_lead_2_sig)
+eststo(tuna_nom_lre_lag_1_sig)
+eststo(tuna_nom_lre_lag_2_sig)
+eststo(tuna_nom_lre_lag_3_sig)
+eststo(tuna_nom_lre_lag_4_sig)
+eststo(tuna_nom_lre_lag_5_sig)
+eststo(tuna_nom_lre_lag_6_sig)
+
+eststo(tuna_net_lre_lags_sig)
+eststo(tuna_net_lre_lead_1_sig)
+eststo(tuna_net_lre_lead_2_sig)
+eststo(tuna_net_lre_lag_1_sig)
+eststo(tuna_net_lre_lag_2_sig)
+eststo(tuna_net_lre_lag_3_sig)
+eststo(tuna_net_lre_lag_4_sig)
+eststo(tuna_net_lre_lag_5_sig)
+eststo(tuna_net_lre_lag_6_sig)
+
+# Output regression table
+esttab(filename=output_file_name,csv=TRUE)
+estclear()
+# Append robust results
+for (i in 1:36) {
+ append_robust_results(i,get(paste0("tuna_diff_model",i)),output_file_name_csv)
+}
+
+
+```
